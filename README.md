@@ -1,8 +1,9 @@
-# Airflow MCP Server
-
-⚠️ This project has been relocated to the [Astronomer agents monorepo](https://github.com/astronomer/agents/tree/main/astro-airflow-mcp).
+> [!WARNING]
+> This project has been relocated to the [Astronomer agents monorepo](https://github.com/astronomer/agents/tree/main/astro-airflow-mcp).
 
 ---
+
+# Airflow MCP Server
 
 [![CI](https://github.com/astronomer/astro-airflow-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/astronomer/astro-airflow-mcp/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
