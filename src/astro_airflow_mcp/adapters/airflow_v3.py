@@ -151,7 +151,9 @@ class AirflowV3Adapter(AirflowAdapter):
         Returns:
             Details of the triggered DAG run
         """
-        json_body: dict[str, Any] = {"logical_date": logical_date}
+        json_body: dict[str, Any] = {}
+        if logical_date is not None:
+            json_body["logical_date"] = logical_date
         if conf:
             json_body["conf"] = conf
 
@@ -298,6 +300,13 @@ class AirflowV3Adapter(AirflowAdapter):
 
             if not dag_ids:
                 return {"dags": [], "total_entries": 0}
+
+            if len(dag_ids) > 50:
+                logger.warning(
+                    "get_dag_stats: fetching stats for %d DAGs individually (N+1 workaround). "
+                    "This may be slow.",
+                    len(dag_ids),
+                )
 
             all_results: dict[str, Any] = {"dags": [], "total_entries": 0, "errors": []}
             for dag_id in dag_ids:
