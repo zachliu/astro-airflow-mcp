@@ -1570,9 +1570,12 @@ def list_asset_events(
     source_dag_id: str | None = None,
     source_run_id: str | None = None,
     source_task_id: str | None = None,
-    limit: int = 100,
+    limit: int = 25,
 ) -> str:
     """List asset/dataset events with optional filtering.
+
+    IMPORTANT: Production Airflow instances can have millions of asset events.
+    Always filter by source_dag_id or source_task_id to avoid enormous responses.
 
     Use this tool when the user asks about:
     - "What asset events were produced by DAG X?"
