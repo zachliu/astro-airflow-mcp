@@ -1135,19 +1135,23 @@ def get_dag_run(dag_id: str, dag_run_id: str) -> str:
 def _trigger_dag_impl(
     dag_id: str,
     conf: dict | None = None,
+    logical_date: str | None = None,
 ) -> str:
     """Internal implementation for triggering a new DAG run.
 
     Args:
         dag_id: The ID of the DAG to trigger
         conf: Optional configuration dictionary to pass to the DAG run
+        logical_date: Optional logical date for the run (ISO 8601)
 
     Returns:
         JSON string containing the triggered DAG run details
     """
     try:
         adapter = _get_adapter()
-        data = adapter.trigger_dag_run(dag_id=dag_id, conf=conf)
+        data = adapter.trigger_dag_run(
+            dag_id=dag_id, logical_date=logical_date, conf=conf
+        )
         return json.dumps(data, indent=2)
     except Exception as e:
         return str(e)
@@ -1195,6 +1199,7 @@ def _get_failed_task_instances(
 def _trigger_dag_and_wait_impl(
     dag_id: str,
     conf: dict | None = None,
+    logical_date: str | None = None,
     poll_interval: float = 5.0,
     timeout: float = 3600.0,
 ) -> str:
@@ -1203,6 +1208,7 @@ def _trigger_dag_and_wait_impl(
     Args:
         dag_id: The ID of the DAG to trigger
         conf: Optional configuration dictionary to pass to the DAG run
+        logical_date: Optional logical date for the run (ISO 8601)
         poll_interval: Seconds between status checks (default: 5.0)
         timeout: Maximum time to wait in seconds (default: 3600.0 / 60 minutes)
 
@@ -1213,6 +1219,7 @@ def _trigger_dag_and_wait_impl(
     trigger_response = _trigger_dag_impl(
         dag_id=dag_id,
         conf=conf,
+        logical_date=logical_date,
     )
 
     try:
@@ -1293,7 +1300,11 @@ def _trigger_dag_and_wait_impl(
 
 
 @mcp.tool()
-def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
+def trigger_dag(
+    dag_id: str,
+    conf: dict | None = None,
+    logical_date: str | None = None,
+) -> str:
     """Trigger a new DAG run (start a workflow execution manually).
 
     Use this tool when the user asks to:
@@ -1302,6 +1313,7 @@ def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
     - "Run this workflow" or "Start this pipeline"
     - "Execute DAG X with config Y" or "Trigger DAG with parameters"
     - "Start a manual run" or "Manually execute this DAG"
+    - "Backfill DAG X for date Y" or "Run DAG for yesterday"
 
     This creates a new DAG run that will be picked up by the scheduler and executed.
     You can optionally pass configuration parameters that will be available to the
@@ -1314,7 +1326,7 @@ def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
     - dag_run_id: Unique identifier for the new execution
     - dag_id: Which DAG was triggered
     - state: Initial state (typically 'queued')
-    - execution_date: When this run is scheduled to execute
+    - logical_date: The logical/execution date for this run
     - start_date: When execution started (may be null if queued)
     - run_type: Type of run (will be 'manual')
     - conf: Configuration passed to the run
@@ -1324,6 +1336,10 @@ def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
         dag_id: The ID of the DAG to trigger (e.g., "example_dag")
         conf: Optional configuration dictionary to pass to the DAG run.
               This will be available in the DAG via context['dag_run'].conf
+        logical_date: Optional logical date for the run (ISO 8601, e.g.
+                      '2025-05-01T00:00:00Z'). Used for backfills to run
+                      a DAG as if it were a specific date. If omitted,
+                      Airflow assigns the current time.
 
     Returns:
         JSON with details about the newly triggered DAG run
@@ -1331,6 +1347,7 @@ def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
     return _trigger_dag_impl(
         dag_id=dag_id,
         conf=conf,
+        logical_date=logical_date,
     )
 
 
@@ -1338,6 +1355,7 @@ def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
 def trigger_dag_and_wait(
     dag_id: str,
     conf: dict | None = None,
+    logical_date: str | None = None,
     timeout: float = 3600.0,
 ) -> str:
     """Trigger a DAG run and wait for it to complete before returning.
@@ -1347,6 +1365,7 @@ def trigger_dag_and_wait(
     - "Trigger DAG Z and wait for completion" or "Run this pipeline synchronously"
     - "Start DAG X and let me know the result" or "Execute and monitor DAG Y"
     - "Run DAG X and show me if it succeeds or fails"
+    - "Backfill DAG X for date Y and tell me when it's done"
 
     This is a BLOCKING operation that will:
     1. Trigger the specified DAG
@@ -1374,6 +1393,10 @@ def trigger_dag_and_wait(
         dag_id: The ID of the DAG to trigger (e.g., "example_dag")
         conf: Optional configuration dictionary to pass to the DAG run.
               This will be available in the DAG via context['dag_run'].conf
+        logical_date: Optional logical date for the run (ISO 8601, e.g.
+                      '2025-05-01T00:00:00Z'). Used for backfills to run
+                      a DAG as if it were a specific date. If omitted,
+                      Airflow assigns the current time.
         timeout: Maximum time to wait in seconds (default: 3600.0 / 60 minutes)
 
     Returns:
@@ -1385,6 +1408,7 @@ def trigger_dag_and_wait(
     return _trigger_dag_and_wait_impl(
         dag_id=dag_id,
         conf=conf,
+        logical_date=logical_date,
         poll_interval=poll_interval,
         timeout=timeout,
     )
