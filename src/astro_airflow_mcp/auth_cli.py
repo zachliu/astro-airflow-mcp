@@ -9,7 +9,7 @@ from astro_airflow_mcp.auth import get_access_token, login, TOKEN_FILE
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Log in to Airflow via Auth0 (PKCE flow through Airflow plugin)",
+        description="Log in to Airflow via Auth0 (authorization code flow through Airflow plugin)",
     )
     parser.add_argument(
         "--auth0-domain",
