@@ -165,8 +165,10 @@ def main():
         )
         if not auth_token:
             logger.error(
-                "No valid token found. "
-                "Run `astro-airflow-mcp-login` first to authenticate."
+                "No valid token found for Auth0 domain '%s'. "
+                "Run `astro-airflow-mcp-login --auth0-domain %s` first to authenticate.",
+                args.auth0_domain,
+                args.auth0_domain,
             )
             raise SystemExit(1)
 

@@ -3,6 +3,7 @@
 import json
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastmcp import FastMCP
@@ -1158,6 +1159,8 @@ def _trigger_dag_impl(
         data = adapter.trigger_dag_run(
             dag_id=dag_id, logical_date=logical_date, conf=conf
         )
+        env = _environment_label()
+        data["_environment"] = env
         return json.dumps(data, indent=2)
     except Exception as e:
         return str(e)
@@ -1432,6 +1435,8 @@ def _pause_dag_impl(dag_id: str) -> str:
     try:
         adapter = _get_adapter()
         data = adapter.pause_dag(dag_id)
+        env = _environment_label()
+        data["_environment"] = env
         return json.dumps(data, indent=2)
     except Exception as e:
         return str(e)
@@ -1476,6 +1481,8 @@ def _unpause_dag_impl(dag_id: str) -> str:
     try:
         adapter = _get_adapter()
         data = adapter.unpause_dag(dag_id)
+        env = _environment_label()
+        data["_environment"] = env
         return json.dumps(data, indent=2)
     except Exception as e:
         return str(e)
@@ -2408,6 +2415,45 @@ def get_system_health() -> str:
         result["overall_status"] = "healthy"
         result["status_reason"] = "No import errors or warnings"
 
+    return json.dumps(result, indent=2)
+
+
+def _environment_label() -> str:
+    """Return a short label identifying the connected Airflow environment.
+
+    Used to prefix destructive operation outputs so the user always knows
+    which environment was affected.
+    """
+    parsed = urlparse(_config.url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port
+    if port and port not in (80, 443):
+        return f"{host}:{port}"
+    return host
+
+
+@mcp.tool()
+def get_current_environment() -> str:
+    """Show which Airflow environment this MCP server is connected to.
+
+    Use this tool when:
+    - The user asks "which Airflow am I connected to?"
+    - Before performing destructive operations to confirm the target
+    - The user is unsure whether they're on integration or production
+
+    Returns:
+        JSON with the current Airflow URL and environment label
+    """
+    result = {
+        "airflow_url": _config.url,
+        "environment": _environment_label(),
+    }
+    try:
+        adapter = _get_adapter()
+        version_info = adapter.get_version()
+        result["airflow_version"] = version_info.get("version", "unknown")
+    except Exception:
+        result["airflow_version"] = "unavailable"
     return json.dumps(result, indent=2)
 
 
