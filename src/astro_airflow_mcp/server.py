@@ -744,6 +744,9 @@ def _get_task_instance_impl(dag_id: str, dag_run_id: str, task_id: str) -> str:
         return str(e)
 
 
+LOG_DIR = "/tmp/airflow-logs"
+
+
 def _get_task_logs_impl(
     dag_id: str,
     dag_run_id: str,
@@ -753,6 +756,9 @@ def _get_task_logs_impl(
 ) -> str:
     """Internal implementation for getting task instance logs from Airflow.
 
+    Downloads log content to a local file and returns a summary with the file path.
+    This avoids blowing up the MCP context window with large log output.
+
     Args:
         dag_id: The ID of the DAG
         dag_run_id: The ID of the DAG run
@@ -761,8 +767,11 @@ def _get_task_logs_impl(
         map_index: For mapped tasks, which map index (-1 for unmapped, default: -1)
 
     Returns:
-        JSON string containing the task logs
+        JSON string with file path and log metadata
     """
+    import os
+    from pathlib import Path
+
     try:
         adapter = _get_adapter()
         data = adapter.get_task_logs(
@@ -773,7 +782,42 @@ def _get_task_logs_impl(
             map_index=map_index,
             full_content=True,
         )
-        return json.dumps(data, indent=2)
+
+        if isinstance(data, dict):
+            raw = data.get("content", "")
+        else:
+            raw = data
+        if isinstance(raw, list):
+            content = "\n".join(str(entry) for entry in raw)
+        else:
+            content = str(raw)
+        total_chars = len(content)
+        total_lines = content.count("\n")
+
+        log_dir = Path(LOG_DIR)
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_run_id = dag_run_id.replace("/", "_").replace(":", "-")
+        filename = f"{dag_id}__{task_id}__try{try_number}__{safe_run_id}.log"
+        filepath = log_dir / filename
+        filepath.write_text(content)
+
+        result = {
+            "status": "saved",
+            "file_path": str(filepath),
+            "dag_id": dag_id,
+            "task_id": task_id,
+            "dag_run_id": dag_run_id,
+            "try_number": try_number,
+            "total_chars": total_chars,
+            "total_lines": total_lines,
+            "note": (
+                f"Logs saved to {filepath} ({total_chars:,} chars, "
+                f"{total_lines:,} lines). Use Read tool on this file to "
+                "inspect content, or search for errors with grep."
+            ),
+        }
+        return json.dumps(result, indent=2)
     except Exception as e:
         return str(e)
 
