@@ -907,21 +907,43 @@ def get_task_logs(
 
 
 def _list_dag_runs_impl(
+    dag_id: str | None = None,
+    state: str | None = None,
     limit: int = DEFAULT_LIMIT,
     offset: int = DEFAULT_OFFSET,
+    start_date_gte: str | None = None,
+    start_date_lte: str | None = None,
+    order_by: str | None = None,
 ) -> str:
     """Internal implementation for listing DAG runs from Airflow.
 
     Args:
+        dag_id: Filter by DAG ID (None for all DAGs)
+        state: Filter by run state (e.g., 'failed', 'success', 'running', 'queued')
         limit: Maximum number of DAG runs to return (default: 100)
         offset: Offset for pagination (default: 0)
+        start_date_gte: Filter runs starting on or after this date (ISO 8601)
+        start_date_lte: Filter runs starting on or before this date (ISO 8601)
+        order_by: Sort order (e.g., '-start_date' for most recent first)
 
     Returns:
         JSON string containing the list of DAG runs with their metadata
     """
     try:
         adapter = _get_adapter()
-        data = adapter.list_dag_runs(limit=limit, offset=offset)
+        kwargs: dict[str, Any] = {}
+        if state:
+            kwargs["state"] = state
+        if start_date_gte:
+            kwargs["start_date_gte"] = start_date_gte
+        if start_date_lte:
+            kwargs["start_date_lte"] = start_date_lte
+        if order_by:
+            kwargs["order_by"] = order_by
+
+        data = adapter.list_dag_runs(
+            dag_id=dag_id, limit=limit, offset=offset, **kwargs
+        )
 
         if "dag_runs" in data:
             return _wrap_list_response(data["dag_runs"], "dag_runs", data)
@@ -931,8 +953,20 @@ def _list_dag_runs_impl(
 
 
 @mcp.tool()
-def list_dag_runs() -> str:
+def list_dag_runs(
+    dag_id: str | None = None,
+    state: str | None = None,
+    limit: int = 25,
+    start_date_gte: str | None = None,
+    start_date_lte: str | None = None,
+    order_by: str | None = None,
+) -> str:
     """Get execution history and status of DAG runs (workflow executions).
+
+    IMPORTANT: Production Airflow instances can have 100K+ DAG runs.
+    Always filter by dag_id or state to avoid enormous responses.
+    If the user asks a broad question like "show me recent runs", ask them
+    to specify a DAG name or state (failed, running, etc.) first.
 
     Use this tool when the user asks about:
     - "What DAG runs have executed?" or "Show me recent runs"
@@ -946,16 +980,31 @@ def list_dag_runs() -> str:
     - dag_run_id: Unique identifier for this execution
     - dag_id: Which DAG this run belongs to
     - state: Current state (running, success, failed, queued)
-    - execution_date: When this run was scheduled to execute
+    - logical_date: Logical/execution date for this run
     - start_date: When execution actually started
     - end_date: When execution completed (if finished)
     - run_type: manual, scheduled, or backfill
     - conf: Configuration passed to this run
 
+    Args:
+        dag_id: Filter by DAG ID (omit for all DAGs - use with caution)
+        state: Filter by state: 'failed', 'success', 'running', or 'queued'
+        limit: Maximum number of runs to return (default: 25)
+        start_date_gte: Filter runs starting on or after this date (ISO 8601, e.g. '2025-05-01T00:00:00Z')
+        start_date_lte: Filter runs starting on or before this date (ISO 8601)
+        order_by: Sort field with optional '-' prefix for descending (e.g. '-start_date')
+
     Returns:
-        JSON with list of DAG runs across all DAGs, sorted by most recent
+        JSON with list of DAG runs matching the filters
     """
-    return _list_dag_runs_impl()
+    return _list_dag_runs_impl(
+        dag_id=dag_id,
+        state=state,
+        limit=limit,
+        start_date_gte=start_date_gte,
+        start_date_lte=start_date_lte,
+        order_by=order_by,
+    )
 
 
 def _get_dag_run_impl(
