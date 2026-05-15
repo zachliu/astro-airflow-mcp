@@ -27,8 +27,22 @@ from astro_airflow_mcp.logging import get_logger
 logger = get_logger(__name__)
 
 TOKEN_FILE = Path.home() / ".config" / "astro-airflow-mcp" / "token.json"
-# Airflow JWT expiration is 86400s (24h) by default; warn 30min before expiry
+DEFAULT_EXPIRY_SECONDS = 86400
 EXPIRY_BUFFER_SECONDS = 1800
+
+
+def _parse_jwt_exp(token: str) -> int | None:
+    """Extract exp claim from a JWT without verifying signature."""
+    try:
+        payload_b64 = token.split(".")[1]
+        # Add padding for base64url
+        padding = 4 - len(payload_b64) % 4
+        if padding != 4:
+            payload_b64 += "=" * padding
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        return payload.get("exp")
+    except (IndexError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def _load_token() -> dict | None:
@@ -42,10 +56,13 @@ def _load_token() -> dict | None:
 
 def _save_token(token: str) -> None:
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    exp = _parse_jwt_exp(token)
+    expires_in = int(exp - now) if exp else DEFAULT_EXPIRY_SECONDS
     token_data = {
         "access_token": token,
-        "fetched_at": time.time(),
-        "expires_in": 86400,
+        "fetched_at": now,
+        "expires_in": expires_in,
     }
     TOKEN_FILE.write_text(json.dumps(token_data, indent=2))
     TOKEN_FILE.chmod(0o600)
@@ -53,7 +70,7 @@ def _save_token(token: str) -> None:
 
 def _token_is_expired(token_data: dict) -> bool:
     fetched_at = token_data.get("fetched_at", 0)
-    expires_in = token_data.get("expires_in", 86400)
+    expires_in = token_data.get("expires_in", DEFAULT_EXPIRY_SECONDS)
     return (time.time() - fetched_at) >= (expires_in - EXPIRY_BUFFER_SECONDS)
 
 
