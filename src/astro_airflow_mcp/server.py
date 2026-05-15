@@ -2263,11 +2263,32 @@ def diagnose_dag_run(dag_id: str, dag_run_id: str) -> str:
         result["run_info"] = {"error": str(e)}
         return json.dumps(result, indent=2)
 
-    # Get task instances for this run
+    # Get task instances for this run (trimmed to diagnostic essentials)
+    # All available fields from Airflow API:
+    #   id, task_id, dag_id, dag_run_id, map_index, logical_date,
+    #   run_after, start_date, end_date, duration, state, try_number,
+    #   max_tries, task_display_name, dag_display_name, hostname,
+    #   unixname, pool, pool_slots, queue, priority_weight, operator,
+    #   operator_name, queued_when, scheduled_when, pid, executor,
+    #   executor_config, note, rendered_map_index, rendered_fields,
+    #   trigger, triggerer_job, dag_version
     try:
         tasks_data = adapter.get_task_instances(dag_id, dag_run_id)
         task_instances = tasks_data.get("task_instances", [])
-        result["task_instances"] = task_instances
+
+        keep_fields = {
+            "task_id",
+            "state",
+            "start_date",
+            "end_date",
+            "duration",
+            "try_number",
+            "operator_name",
+        }
+        result["task_instances"] = [
+            {k: v for k, v in ti.items() if k in keep_fields}
+            for ti in task_instances
+        ]
 
         # Summarize task states
         state_counts: dict[str, int] = {}
@@ -2282,7 +2303,9 @@ def diagnose_dag_run(dag_id: str, dag_run_id: str) -> str:
                         "state": state,
                         "start_date": ti.get("start_date"),
                         "end_date": ti.get("end_date"),
+                        "duration": ti.get("duration"),
                         "try_number": ti.get("try_number"),
+                        "operator_name": ti.get("operator_name"),
                     }
                 )
 
