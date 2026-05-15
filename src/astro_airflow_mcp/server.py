@@ -696,7 +696,30 @@ def _list_tasks_impl(dag_id: str) -> str:
         data = adapter.list_tasks(dag_id)
 
         if "tasks" in data:
-            return _wrap_list_response(data["tasks"], "tasks", data)
+            # Trim to essential fields to avoid blowing up context
+            # All available fields from Airflow API:
+            #   task_id, task_display_name, owner, start_date, end_date,
+            #   trigger_rule, depends_on_past, wait_for_downstream, retries,
+            #   queue, pool, pool_slots, execution_timeout, retry_delay,
+            #   retry_exponential_backoff, priority_weight, weight_rule,
+            #   ui_color, ui_fgcolor, template_fields, downstream_task_ids,
+            #   doc_md, operator_name, params, class_ref, is_mapped, extra_links
+            keep_fields = {
+                "task_id",
+                "task_display_name",
+                "operator_name",
+                "owner",
+                "pool",
+                "trigger_rule",
+                "retries",
+                "downstream_task_ids",
+                "is_mapped",
+            }
+            trimmed = [
+                {k: v for k, v in t.items() if k in keep_fields}
+                for t in data["tasks"]
+            ]
+            return _wrap_list_response(trimmed, "tasks", data)
         return f"No tasks found. Response: {data}"
     except Exception as e:
         return str(e)
