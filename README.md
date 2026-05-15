@@ -57,7 +57,7 @@ astro-airflow-mcp-login \
 
 After logging in, copy the token from the browser page and paste it into the CLI.
 
-### 3. Restart Claude Code
+### 4. Restart Claude Code
 
 The MCP server will be available. Try asking: "List my DAGs" or "Show Airflow system health".
 
