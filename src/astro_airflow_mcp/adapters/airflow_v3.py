@@ -6,6 +6,9 @@ from typing import Any
 import httpx
 
 from astro_airflow_mcp.adapters.base import AirflowAdapter, NotFoundError
+from astro_airflow_mcp.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class AirflowV3Adapter(AirflowAdapter):

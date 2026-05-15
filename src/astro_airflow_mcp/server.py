@@ -439,6 +439,12 @@ def _list_dags_impl(
         total = data.get("total_entries") or data.get("total_dags")
 
         if total and offset == 0:
+            if total > 500:
+                logger.warning(
+                    "list_dags: auto-paginating through %d DAGs. "
+                    "This may produce a large response.",
+                    total,
+                )
             while len(all_dags) < total:
                 page = adapter.list_dags(limit=limit, offset=len(all_dags))
                 batch = page.get("dags", [])
