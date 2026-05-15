@@ -1,10 +1,11 @@
-"""Auth0 PKCE authentication for the Airflow MCP server.
+"""Auth0 authorization code authentication for the Airflow MCP server.
 
 Flow:
 1. `login()` opens browser to Auth0 authorize URL with redirect to the
    Airflow plugin callback (`/oauth/mcp-callback`)
-2. The plugin exchanges the Auth0 code server-side, looks up the FAB user,
-   and mints an Airflow API JWT - displayed on a page for the user to copy
+2. The plugin exchanges the Auth0 code server-side (using client_secret),
+   looks up the FAB user, and mints an Airflow API JWT - displayed on a
+   page for the user to copy
 3. User pastes the Airflow JWT back into the CLI
 4. Token is stored locally for the MCP server to use
 
@@ -13,9 +14,9 @@ Two entry points:
 - `get_access_token()`: non-interactive, used by MCP server on startup
 """
 
+import base64
 import json
 import secrets
-import sys
 import time
 import webbrowser
 from pathlib import Path
