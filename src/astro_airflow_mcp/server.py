@@ -3,6 +3,7 @@
 import json
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastmcp import FastMCP
@@ -21,6 +22,25 @@ DEFAULT_OFFSET = 0
 TOKEN_REFRESH_BUFFER_SECONDS = 300
 # Terminal states for DAG runs (polling stops when reached)
 TERMINAL_DAG_RUN_STATES = {"success", "failed", "upstream_failed"}
+# Essential fields to keep when trimming task metadata (avoids context overflow).
+# All available fields from Airflow API:
+#   task_id, task_display_name, owner, start_date, end_date,
+#   trigger_rule, depends_on_past, wait_for_downstream, retries,
+#   queue, pool, pool_slots, execution_timeout, retry_delay,
+#   retry_exponential_backoff, priority_weight, weight_rule,
+#   ui_color, ui_fgcolor, template_fields, downstream_task_ids,
+#   doc_md, operator_name, params, class_ref, is_mapped, extra_links
+TASK_ESSENTIAL_FIELDS = {
+    "task_id",
+    "task_display_name",
+    "operator_name",
+    "owner",
+    "pool",
+    "trigger_rule",
+    "retries",
+    "downstream_task_ids",
+    "is_mapped",
+}
 
 
 class AirflowTokenManager:
@@ -418,8 +438,11 @@ def _list_dags_impl(
 ) -> str:
     """Internal implementation for listing DAGs from Airflow.
 
+    Automatically paginates through all results when using the default
+    offset of 0, so the caller gets the complete DAG list.
+
     Args:
-        limit: Maximum number of DAGs to return (default: 100)
+        limit: Page size per request (default: 100)
         offset: Offset for pagination (default: 0)
 
     Returns:
@@ -429,9 +452,28 @@ def _list_dags_impl(
         adapter = _get_adapter()
         data = adapter.list_dags(limit=limit, offset=offset)
 
-        if "dags" in data:
-            return _wrap_list_response(data["dags"], "dags", data)
-        return f"No DAGs found. Response: {data}"
+        if "dags" not in data:
+            return f"No DAGs found. Response: {data}"
+
+        all_dags = list(data["dags"])
+        total = data.get("total_entries") or data.get("total_dags")
+
+        if total and offset == 0:
+            if total > 500:
+                logger.warning(
+                    "list_dags: auto-paginating through %d DAGs. "
+                    "This may produce a large response.",
+                    total,
+                )
+            while len(all_dags) < total:
+                page = adapter.list_dags(limit=limit, offset=len(all_dags))
+                batch = page.get("dags", [])
+                if not batch:
+                    break
+                all_dags.extend(batch)
+
+        data["dags"] = all_dags
+        return _wrap_list_response(all_dags, "dags", data)
     except Exception as e:
         return str(e)
 
@@ -680,7 +722,11 @@ def _list_tasks_impl(dag_id: str) -> str:
         data = adapter.list_tasks(dag_id)
 
         if "tasks" in data:
-            return _wrap_list_response(data["tasks"], "tasks", data)
+            trimmed = [
+                {k: v for k, v in t.items() if k in TASK_ESSENTIAL_FIELDS}
+                for t in data["tasks"]
+            ]
+            return _wrap_list_response(trimmed, "tasks", data)
         return f"No tasks found. Response: {data}"
     except Exception as e:
         return str(e)
@@ -705,6 +751,9 @@ def _get_task_instance_impl(dag_id: str, dag_run_id: str, task_id: str) -> str:
         return str(e)
 
 
+LOG_DIR = "/tmp/airflow-logs"
+
+
 def _get_task_logs_impl(
     dag_id: str,
     dag_run_id: str,
@@ -714,6 +763,9 @@ def _get_task_logs_impl(
 ) -> str:
     """Internal implementation for getting task instance logs from Airflow.
 
+    Downloads log content to a local file and returns a summary with the file path.
+    This avoids blowing up the MCP context window with large log output.
+
     Args:
         dag_id: The ID of the DAG
         dag_run_id: The ID of the DAG run
@@ -722,8 +774,11 @@ def _get_task_logs_impl(
         map_index: For mapped tasks, which map index (-1 for unmapped, default: -1)
 
     Returns:
-        JSON string containing the task logs
+        JSON string with file path and log metadata
     """
+    import os
+    from pathlib import Path
+
     try:
         adapter = _get_adapter()
         data = adapter.get_task_logs(
@@ -734,7 +789,42 @@ def _get_task_logs_impl(
             map_index=map_index,
             full_content=True,
         )
-        return json.dumps(data, indent=2)
+
+        if isinstance(data, dict):
+            raw = data.get("content", "")
+        else:
+            raw = data
+        if isinstance(raw, list):
+            content = "\n".join(str(entry) for entry in raw)
+        else:
+            content = str(raw)
+        total_chars = len(content)
+        total_lines = content.count("\n")
+
+        log_dir = Path(LOG_DIR)
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_run_id = dag_run_id.replace("/", "_").replace(":", "-")
+        filename = f"{dag_id}__{task_id}__try{try_number}__{safe_run_id}.log"
+        filepath = log_dir / filename
+        filepath.write_text(content)
+
+        result = {
+            "status": "saved",
+            "file_path": str(filepath),
+            "dag_id": dag_id,
+            "task_id": task_id,
+            "dag_run_id": dag_run_id,
+            "try_number": try_number,
+            "total_chars": total_chars,
+            "total_lines": total_lines,
+            "note": (
+                f"Logs saved to {filepath} ({total_chars:,} chars, "
+                f"{total_lines:,} lines). Use Read tool on this file to "
+                "inspect content, or search for errors with grep."
+            ),
+        }
+        return json.dumps(result, indent=2)
     except Exception as e:
         return str(e)
 
@@ -891,21 +981,43 @@ def get_task_logs(
 
 
 def _list_dag_runs_impl(
+    dag_id: str | None = None,
+    state: str | None = None,
     limit: int = DEFAULT_LIMIT,
     offset: int = DEFAULT_OFFSET,
+    start_date_gte: str | None = None,
+    start_date_lte: str | None = None,
+    order_by: str | None = None,
 ) -> str:
     """Internal implementation for listing DAG runs from Airflow.
 
     Args:
+        dag_id: Filter by DAG ID (None for all DAGs)
+        state: Filter by run state (e.g., 'failed', 'success', 'running', 'queued')
         limit: Maximum number of DAG runs to return (default: 100)
         offset: Offset for pagination (default: 0)
+        start_date_gte: Filter runs starting on or after this date (ISO 8601)
+        start_date_lte: Filter runs starting on or before this date (ISO 8601)
+        order_by: Sort order (e.g., '-start_date' for most recent first)
 
     Returns:
         JSON string containing the list of DAG runs with their metadata
     """
     try:
         adapter = _get_adapter()
-        data = adapter.list_dag_runs(limit=limit, offset=offset)
+        kwargs: dict[str, Any] = {}
+        if state:
+            kwargs["state"] = state
+        if start_date_gte:
+            kwargs["start_date_gte"] = start_date_gte
+        if start_date_lte:
+            kwargs["start_date_lte"] = start_date_lte
+        if order_by:
+            kwargs["order_by"] = order_by
+
+        data = adapter.list_dag_runs(
+            dag_id=dag_id, limit=limit, offset=offset, **kwargs
+        )
 
         if "dag_runs" in data:
             return _wrap_list_response(data["dag_runs"], "dag_runs", data)
@@ -915,8 +1027,20 @@ def _list_dag_runs_impl(
 
 
 @mcp.tool()
-def list_dag_runs() -> str:
+def list_dag_runs(
+    dag_id: str | None = None,
+    state: str | None = None,
+    limit: int = 25,
+    start_date_gte: str | None = None,
+    start_date_lte: str | None = None,
+    order_by: str | None = None,
+) -> str:
     """Get execution history and status of DAG runs (workflow executions).
+
+    IMPORTANT: Production Airflow instances can have 100K+ DAG runs.
+    Always filter by dag_id or state to avoid enormous responses.
+    If the user asks a broad question like "show me recent runs", ask them
+    to specify a DAG name or state (failed, running, etc.) first.
 
     Use this tool when the user asks about:
     - "What DAG runs have executed?" or "Show me recent runs"
@@ -930,16 +1054,31 @@ def list_dag_runs() -> str:
     - dag_run_id: Unique identifier for this execution
     - dag_id: Which DAG this run belongs to
     - state: Current state (running, success, failed, queued)
-    - execution_date: When this run was scheduled to execute
+    - logical_date: Logical/execution date for this run
     - start_date: When execution actually started
     - end_date: When execution completed (if finished)
     - run_type: manual, scheduled, or backfill
     - conf: Configuration passed to this run
 
+    Args:
+        dag_id: Filter by DAG ID (omit for all DAGs - use with caution)
+        state: Filter by state: 'failed', 'success', 'running', or 'queued'
+        limit: Maximum number of runs to return (default: 25)
+        start_date_gte: Filter runs starting on or after this date (ISO 8601, e.g. '2025-05-01T00:00:00Z')
+        start_date_lte: Filter runs starting on or before this date (ISO 8601)
+        order_by: Sort field with optional '-' prefix for descending (e.g. '-start_date')
+
     Returns:
-        JSON with list of DAG runs across all DAGs, sorted by most recent
+        JSON with list of DAG runs matching the filters
     """
-    return _list_dag_runs_impl()
+    return _list_dag_runs_impl(
+        dag_id=dag_id,
+        state=state,
+        limit=limit,
+        start_date_gte=start_date_gte,
+        start_date_lte=start_date_lte,
+        order_by=order_by,
+    )
 
 
 def _get_dag_run_impl(
@@ -1003,19 +1142,25 @@ def get_dag_run(dag_id: str, dag_run_id: str) -> str:
 def _trigger_dag_impl(
     dag_id: str,
     conf: dict | None = None,
+    logical_date: str | None = None,
 ) -> str:
     """Internal implementation for triggering a new DAG run.
 
     Args:
         dag_id: The ID of the DAG to trigger
         conf: Optional configuration dictionary to pass to the DAG run
+        logical_date: Optional logical date for the run (ISO 8601)
 
     Returns:
         JSON string containing the triggered DAG run details
     """
     try:
         adapter = _get_adapter()
-        data = adapter.trigger_dag_run(dag_id=dag_id, conf=conf)
+        data = adapter.trigger_dag_run(
+            dag_id=dag_id, logical_date=logical_date, conf=conf
+        )
+        env = _environment_label()
+        data["_environment"] = env
         return json.dumps(data, indent=2)
     except Exception as e:
         return str(e)
@@ -1063,6 +1208,7 @@ def _get_failed_task_instances(
 def _trigger_dag_and_wait_impl(
     dag_id: str,
     conf: dict | None = None,
+    logical_date: str | None = None,
     poll_interval: float = 5.0,
     timeout: float = 3600.0,
 ) -> str:
@@ -1071,6 +1217,7 @@ def _trigger_dag_and_wait_impl(
     Args:
         dag_id: The ID of the DAG to trigger
         conf: Optional configuration dictionary to pass to the DAG run
+        logical_date: Optional logical date for the run (ISO 8601)
         poll_interval: Seconds between status checks (default: 5.0)
         timeout: Maximum time to wait in seconds (default: 3600.0 / 60 minutes)
 
@@ -1081,6 +1228,7 @@ def _trigger_dag_and_wait_impl(
     trigger_response = _trigger_dag_impl(
         dag_id=dag_id,
         conf=conf,
+        logical_date=logical_date,
     )
 
     try:
@@ -1161,7 +1309,11 @@ def _trigger_dag_and_wait_impl(
 
 
 @mcp.tool()
-def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
+def trigger_dag(
+    dag_id: str,
+    conf: dict | None = None,
+    logical_date: str | None = None,
+) -> str:
     """Trigger a new DAG run (start a workflow execution manually).
 
     Use this tool when the user asks to:
@@ -1170,6 +1322,7 @@ def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
     - "Run this workflow" or "Start this pipeline"
     - "Execute DAG X with config Y" or "Trigger DAG with parameters"
     - "Start a manual run" or "Manually execute this DAG"
+    - "Backfill DAG X for date Y" or "Run DAG for yesterday"
 
     This creates a new DAG run that will be picked up by the scheduler and executed.
     You can optionally pass configuration parameters that will be available to the
@@ -1182,7 +1335,7 @@ def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
     - dag_run_id: Unique identifier for the new execution
     - dag_id: Which DAG was triggered
     - state: Initial state (typically 'queued')
-    - execution_date: When this run is scheduled to execute
+    - logical_date: The logical/execution date for this run
     - start_date: When execution started (may be null if queued)
     - run_type: Type of run (will be 'manual')
     - conf: Configuration passed to the run
@@ -1192,6 +1345,10 @@ def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
         dag_id: The ID of the DAG to trigger (e.g., "example_dag")
         conf: Optional configuration dictionary to pass to the DAG run.
               This will be available in the DAG via context['dag_run'].conf
+        logical_date: Optional logical date for the run (ISO 8601, e.g.
+                      '2025-05-01T00:00:00Z'). Used for backfills to run
+                      a DAG as if it were a specific date. If omitted,
+                      Airflow assigns the current time.
 
     Returns:
         JSON with details about the newly triggered DAG run
@@ -1199,6 +1356,7 @@ def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
     return _trigger_dag_impl(
         dag_id=dag_id,
         conf=conf,
+        logical_date=logical_date,
     )
 
 
@@ -1206,6 +1364,7 @@ def trigger_dag(dag_id: str, conf: dict | None = None) -> str:
 def trigger_dag_and_wait(
     dag_id: str,
     conf: dict | None = None,
+    logical_date: str | None = None,
     timeout: float = 3600.0,
 ) -> str:
     """Trigger a DAG run and wait for it to complete before returning.
@@ -1215,6 +1374,7 @@ def trigger_dag_and_wait(
     - "Trigger DAG Z and wait for completion" or "Run this pipeline synchronously"
     - "Start DAG X and let me know the result" or "Execute and monitor DAG Y"
     - "Run DAG X and show me if it succeeds or fails"
+    - "Backfill DAG X for date Y and tell me when it's done"
 
     This is a BLOCKING operation that will:
     1. Trigger the specified DAG
@@ -1242,6 +1402,10 @@ def trigger_dag_and_wait(
         dag_id: The ID of the DAG to trigger (e.g., "example_dag")
         conf: Optional configuration dictionary to pass to the DAG run.
               This will be available in the DAG via context['dag_run'].conf
+        logical_date: Optional logical date for the run (ISO 8601, e.g.
+                      '2025-05-01T00:00:00Z'). Used for backfills to run
+                      a DAG as if it were a specific date. If omitted,
+                      Airflow assigns the current time.
         timeout: Maximum time to wait in seconds (default: 3600.0 / 60 minutes)
 
     Returns:
@@ -1253,6 +1417,7 @@ def trigger_dag_and_wait(
     return _trigger_dag_and_wait_impl(
         dag_id=dag_id,
         conf=conf,
+        logical_date=logical_date,
         poll_interval=poll_interval,
         timeout=timeout,
     )
@@ -1270,6 +1435,8 @@ def _pause_dag_impl(dag_id: str) -> str:
     try:
         adapter = _get_adapter()
         data = adapter.pause_dag(dag_id)
+        env = _environment_label()
+        data["_environment"] = env
         return json.dumps(data, indent=2)
     except Exception as e:
         return str(e)
@@ -1314,6 +1481,8 @@ def _unpause_dag_impl(dag_id: str) -> str:
     try:
         adapter = _get_adapter()
         data = adapter.unpause_dag(dag_id)
+        env = _environment_label()
+        data["_environment"] = env
         return json.dumps(data, indent=2)
     except Exception as e:
         return str(e)
@@ -1438,9 +1607,12 @@ def list_asset_events(
     source_dag_id: str | None = None,
     source_run_id: str | None = None,
     source_task_id: str | None = None,
-    limit: int = 100,
+    limit: int = 25,
 ) -> str:
     """List asset/dataset events with optional filtering.
+
+    IMPORTANT: Production Airflow instances can have millions of asset events.
+    Always filter by source_dag_id or source_task_id to avoid enormous responses.
 
     Use this tool when the user asks about:
     - "What asset events were produced by DAG X?"
@@ -2059,10 +2231,13 @@ def explore_dag(dag_id: str) -> str:
     except Exception as e:
         result["dag_info"] = {"error": str(e)}
 
-    # Get tasks
+    # Get tasks (trimmed via TASK_ESSENTIAL_FIELDS to avoid context overflow)
     try:
         tasks_data = adapter.list_tasks(dag_id)
-        result["tasks"] = tasks_data.get("tasks", [])
+        result["tasks"] = [
+            {k: v for k, v in t.items() if k in TASK_ESSENTIAL_FIELDS}
+            for t in tasks_data.get("tasks", [])
+        ]
     except Exception as e:
         result["tasks"] = {"error": str(e)}
 
@@ -2110,11 +2285,32 @@ def diagnose_dag_run(dag_id: str, dag_run_id: str) -> str:
         result["run_info"] = {"error": str(e)}
         return json.dumps(result, indent=2)
 
-    # Get task instances for this run
+    # Get task instances for this run (trimmed to diagnostic essentials)
+    # All available fields from Airflow API:
+    #   id, task_id, dag_id, dag_run_id, map_index, logical_date,
+    #   run_after, start_date, end_date, duration, state, try_number,
+    #   max_tries, task_display_name, dag_display_name, hostname,
+    #   unixname, pool, pool_slots, queue, priority_weight, operator,
+    #   operator_name, queued_when, scheduled_when, pid, executor,
+    #   executor_config, note, rendered_map_index, rendered_fields,
+    #   trigger, triggerer_job, dag_version
     try:
         tasks_data = adapter.get_task_instances(dag_id, dag_run_id)
         task_instances = tasks_data.get("task_instances", [])
-        result["task_instances"] = task_instances
+
+        keep_fields = {
+            "task_id",
+            "state",
+            "start_date",
+            "end_date",
+            "duration",
+            "try_number",
+            "operator_name",
+        }
+        result["task_instances"] = [
+            {k: v for k, v in ti.items() if k in keep_fields}
+            for ti in task_instances
+        ]
 
         # Summarize task states
         state_counts: dict[str, int] = {}
@@ -2129,7 +2325,9 @@ def diagnose_dag_run(dag_id: str, dag_run_id: str) -> str:
                         "state": state,
                         "start_date": ti.get("start_date"),
                         "end_date": ti.get("end_date"),
+                        "duration": ti.get("duration"),
                         "try_number": ti.get("try_number"),
+                        "operator_name": ti.get("operator_name"),
                     }
                 )
 
@@ -2217,6 +2415,45 @@ def get_system_health() -> str:
         result["overall_status"] = "healthy"
         result["status_reason"] = "No import errors or warnings"
 
+    return json.dumps(result, indent=2)
+
+
+def _environment_label() -> str:
+    """Return a short label identifying the connected Airflow environment.
+
+    Used to prefix destructive operation outputs so the user always knows
+    which environment was affected.
+    """
+    parsed = urlparse(_config.url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port
+    if port and port not in (80, 443):
+        return f"{host}:{port}"
+    return host
+
+
+@mcp.tool()
+def get_current_environment() -> str:
+    """Show which Airflow environment this MCP server is connected to.
+
+    Use this tool when:
+    - The user asks "which Airflow am I connected to?"
+    - Before performing destructive operations to confirm the target
+    - The user is unsure whether they're on integration or production
+
+    Returns:
+        JSON with the current Airflow URL and environment label
+    """
+    result = {
+        "airflow_url": _config.url,
+        "environment": _environment_label(),
+    }
+    try:
+        adapter = _get_adapter()
+        version_info = adapter.get_version()
+        result["airflow_version"] = version_info.get("version", "unknown")
+    except Exception:
+        result["airflow_version"] = "unavailable"
     return json.dumps(result, indent=2)
 
 

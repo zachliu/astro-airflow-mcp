@@ -311,14 +311,14 @@ class TestAirflowV3Adapter:
         assert adapter.api_base_path == "/api/v2"
 
     def test_get_dag_stats_call(self, mocker):
-        """Test V3 adapter calls dagStats endpoint."""
+        """Test V3 adapter fetches active DAGs then calls dagStats per DAG."""
         adapter = AirflowV3Adapter(
             "http://localhost:8080",
             "3.0.0",
         )
 
         mock_response = mocker.Mock()
-        mock_response.json.return_value = {"dags": []}
+        mock_response.json.return_value = {"dags": [], "total_entries": 0}
         mock_response.status_code = 200
         mock_response.raise_for_status = mocker.Mock()
 
@@ -331,9 +331,11 @@ class TestAirflowV3Adapter:
 
         result = adapter.get_dag_stats()
 
-        assert result == {"dags": []}
+        # When no active DAGs found, returns empty result
+        assert result == {"dags": [], "total_entries": 0}
+        # First call should be to list active DAGs
         call_args = mock_client.get.call_args
-        assert "/api/v2/dagStats" in call_args[0][0]
+        assert "/api/v2/dags" in call_args[0][0]
 
     def test_passthrough_params(self, mocker):
         """Test kwargs are passed through to API call."""

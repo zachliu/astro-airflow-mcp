@@ -19,6 +19,7 @@ plugin = [
 
 [project.scripts]
 astro-airflow-mcp = "astro_airflow_mcp.__main__:main"
+astro-airflow-mcp-login = "astro_airflow_mcp.auth_cli:main"
 
 [project.entry-points."airflow.plugins"]
 airflow_mcp = "astro_airflow_mcp.plugin:AirflowMCPPlugin"

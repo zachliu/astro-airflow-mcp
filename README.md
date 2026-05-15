@@ -1,158 +1,142 @@
-> [!WARNING]
-> This project has been relocated to the [Astronomer agents monorepo](https://github.com/astronomer/agents/tree/main/astro-airflow-mcp).
-
----
-
 # Airflow MCP Server
 
-[![CI](https://github.com/astronomer/astro-airflow-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/astronomer/astro-airflow-mcp/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![PyPI - Version](https://img.shields.io/pypi/v/astro-airflow-mcp.svg?color=blue)](https://pypi.org/project/astro-airflow-mcp)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://github.com/astronomer/astro-airflow-mcp/blob/main/LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for Apache Airflow that provides AI assistants with access to Airflow's REST API. Built with [FastMCP](https://github.com/jlowin/fastmcp).
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for Apache Airflow that gives AI assistants access to Airflow's REST API. Built with [FastMCP](https://github.com/jlowin/fastmcp).
 
-## Quickstart
+Supports Airflow 2.x and 3.x with automatic version detection.
 
-### IDEs
+## Installation
 
-<a href="https://insiders.vscode.dev/redirect?url=vscode://ms-vscode.vscode-mcp/install?%7B%22name%22%3A%22astro-airflow-mcp%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22astro-airflow-mcp%22%2C%22--transport%22%2C%22stdio%22%5D%7D"><img src="https://img.shields.io/badge/VS_Code-Install_Server-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white" alt="Install in VS Code" height="32"></a>
-<a href="https://cursor.com/en-US/install-mcp?name=astro-airflow-mcp&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJhc3Ryby1haXJmbG93LW1jcCIsIi0tdHJhbnNwb3J0Iiwic3RkaW8iXX0"><img src="https://cursor.com/deeplink/mcp-install-dark.svg" alt="Add to Cursor" height="32"></a>
+```bash
+pip install git+https://github.com/zachliu/astro-airflow-mcp.git
+```
 
-<details>
-<summary>Manual configuration</summary>
+## Setup for Claude Code
 
-Add to your MCP settings (Cursor: `~/.cursor/mcp.json`, VS Code: `.vscode/mcp.json`):
+### 1. Get credentials
+
+Get the following values from your team lead or secrets manager (e.g., HashiCorp Vault):
+
+- `AUTH0_DOMAIN` - Auth0 tenant domain for your environment
+- `AUTH0_CLIENT_ID` - Auth0 application client ID
+- `AIRFLOW_API_URL` - Your Airflow instance URL
+- `AUTH0_CALLBACK_URL` - OAuth callback URL on your Airflow instance
+
+### 2. Add MCP config
+
+Add to your project's `.mcp.json` (or `~/.claude/.mcp.json` for global access):
 
 ```json
 {
   "mcpServers": {
     "airflow": {
-      "command": "uvx",
-      "args": ["astro-airflow-mcp", "--transport", "stdio"]
+      "command": "astro-airflow-mcp",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "AIRFLOW_API_URL": "<your-airflow-url>",
+        "AUTH0_DOMAIN": "<your-auth0-domain>",
+        "AUTH0_CLIENT_ID": "<your-auth0-client-id>"
+      }
     }
   }
 }
 ```
 
-</details>
+### 3. Authenticate
 
-### CLI Tools
-
-<details>
-<summary>Claude Code</summary>
+Run once (opens browser for Auth0 login):
 
 ```bash
-claude mcp add airflow -- uvx astro-airflow-mcp --transport stdio
+astro-airflow-mcp-login \
+  --auth0-domain <your-auth0-domain> \
+  --auth0-client-id <your-auth0-client-id> \
+  --auth0-callback-url <your-auth0-callback-url>
 ```
 
-</details>
+After logging in, copy the token from the browser page and paste it into the CLI.
 
-<details>
-<summary>Gemini CLI</summary>
+### 4. Restart Claude Code
+
+The MCP server will be available. Try asking: "List my DAGs" or "Show Airflow system health".
+
+## Multi-Environment Support
+
+Tokens are stored per Auth0 domain, so you can authenticate to multiple environments simultaneously. Just run the login command once per environment with the corresponding credentials:
 
 ```bash
-gemini mcp add airflow -- uvx astro-airflow-mcp --transport stdio
+# Environment A (e.g., integration)
+astro-airflow-mcp-login \
+  --auth0-domain <env-a-auth0-domain> \
+  --auth0-client-id <env-a-client-id> \
+  --auth0-callback-url <env-a-callback-url>
+
+# Environment B (e.g., production)
+astro-airflow-mcp-login \
+  --auth0-domain <env-b-auth0-domain> \
+  --auth0-client-id <env-b-client-id> \
+  --auth0-callback-url <env-b-callback-url>
 ```
 
-</details>
+Each environment gets its own token file at `~/.config/astro-airflow-mcp/tokens/`.
 
-<details>
-<summary>Codex CLI</summary>
+### Token management
 
 ```bash
-codex mcp add airflow -- uvx astro-airflow-mcp --transport stdio
+# List all stored tokens and their status
+astro-airflow-mcp-login --list
+
+# Check a specific environment
+astro-airflow-mcp-login --status --auth0-domain mycompany-dev.us.auth0.com
 ```
 
-</details>
+Tokens last 24 hours. Re-run the login command when expired.
 
-### Desktop Apps
+### Environment awareness
 
-<details>
-<summary>Claude Desktop</summary>
+The MCP server includes a `get_current_environment` tool that returns which Airflow instance is connected. Destructive operations (pause, unpause, trigger) include the environment label in their output so you always know which environment was affected.
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+## Other MCP Clients
+
+### VS Code / Cursor
+
+Add to `.vscode/mcp.json` or `~/.cursor/mcp.json` (same config format as above):
 
 ```json
 {
   "mcpServers": {
     "airflow": {
-      "command": "uvx",
-      "args": ["astro-airflow-mcp", "--transport", "stdio"]
+      "command": "astro-airflow-mcp",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "AIRFLOW_API_URL": "<your-airflow-url>",
+        "AUTH0_DOMAIN": "<your-auth0-domain>",
+        "AUTH0_CLIENT_ID": "<your-auth0-client-id>"
+      }
     }
   }
 }
 ```
 
-</details>
+### HTTP mode
 
-### Other MCP Clients
-
-<details>
-<summary>Manual JSON Configuration</summary>
-
-Add to your MCP configuration file:
-
-```json
-{
-  "mcpServers": {
-    "airflow": {
-      "command": "uvx",
-      "args": ["astro-airflow-mcp", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-Or connect to a running HTTP server: `"url": "http://localhost:8000/mcp"`
-
-</details>
-
-> **Note:** No installation required - `uvx` runs directly from PyPI. The `--transport stdio` flag is required because the server defaults to HTTP mode.
-
-### Configuration
-
-By default, the server connects to `http://localhost:8080` (Astro CLI default). Set environment variables for custom Airflow instances:
-
-| Variable | Description |
-|----------|-------------|
-| `AIRFLOW_API_URL` | Airflow webserver URL |
-| `AIRFLOW_USERNAME` | Username (Airflow 3.x uses OAuth2 token exchange) |
-| `AIRFLOW_PASSWORD` | Password |
-| `AIRFLOW_AUTH_TOKEN` | Bearer token (alternative to username/password) |
-
-Example with auth (Claude Code):
+For connecting multiple clients to one server:
 
 ```bash
-claude mcp add airflow -e AIRFLOW_API_URL=https://your-airflow.example.com -e AIRFLOW_USERNAME=admin -e AIRFLOW_PASSWORD=admin -- uvx astro-airflow-mcp --transport stdio
+astro-airflow-mcp --transport http --host localhost --port 8000
 ```
 
-## Features
+Connect clients to: `http://localhost:8000/mcp`
 
-- **Airflow 2.x and 3.x Support**: Automatic version detection with adapter pattern
-- **MCP Tools** for accessing Airflow data:
-  - DAG management (list, get details, get source code, stats, warnings, import errors, trigger, pause/unpause)
-  - Task management (list, get details, get task instances, get logs)
-  - Pool management (list, get details)
-  - Variable management (list, get specific variables)
-  - Connection management (list connections with credentials excluded)
-  - Asset/Dataset management (unified naming across versions, data lineage)
-  - Plugin and provider information
-  - Configuration and version details
-- **Consolidated Tools** for agent workflows:
-  - `explore_dag`: Get comprehensive DAG information in one call
-  - `diagnose_dag_run`: Debug failed DAG runs with task instance details
-  - `get_system_health`: System overview with health, errors, and warnings
-- **MCP Resources**: Static Airflow info exposed as resources (version, providers, plugins, config)
-- **MCP Prompts**: Guided workflows for common tasks (troubleshooting, health checks, onboarding)
-- **Dual deployment modes**:
-  - **Standalone server**: Run as an independent MCP server
-  - **Airflow plugin**: Integrate directly into Airflow 3.x webserver
-- **Flexible Authentication**:
-  - Bearer token (Airflow 2.x and 3.x)
-  - Username/password with automatic OAuth2 token exchange (Airflow 3.x)
-  - Basic auth (Airflow 2.x)
+## Authentication
 
+This server uses Auth0 with an Airflow OAuth plugin. The flow:
+
+1. You run `astro-airflow-mcp-login` which opens Auth0 in your browser
+2. After authenticating, the Airflow plugin exchanges the Auth0 code for an Airflow API JWT
+3. You paste the JWT back into the CLI, which stores it locally
+4. The MCP server uses the stored JWT for API calls (valid for 24 hours)
 
 ## Available Tools
 
@@ -163,6 +147,7 @@ claude mcp add airflow -e AIRFLOW_API_URL=https://your-airflow.example.com -e AI
 | `explore_dag` | Get comprehensive DAG info: metadata, tasks, recent runs, source code |
 | `diagnose_dag_run` | Debug a DAG run: run details, failed task instances, logs |
 | `get_system_health` | System overview: health status, import errors, warnings, DAG stats |
+| `get_current_environment` | Show which Airflow instance is connected |
 
 ### Core Tools
 
@@ -176,19 +161,20 @@ claude mcp add airflow -e AIRFLOW_API_URL=https://your-airflow.example.com -e AI
 | `list_import_errors` | Get import errors from DAG files that failed to parse |
 | `list_dag_runs` | Get DAG run history |
 | `get_dag_run` | Get specific DAG run details |
-| `trigger_dag` | Trigger a new DAG run (start a workflow execution) |
+| `trigger_dag` | Trigger a new DAG run |
+| `trigger_dag_and_wait` | Trigger a DAG run and poll until completion |
 | `pause_dag` | Pause a DAG to prevent new scheduled runs |
 | `unpause_dag` | Unpause a DAG to resume scheduled runs |
 | `list_tasks` | Get all tasks in a DAG |
 | `get_task` | Get details about a specific task |
 | `get_task_instance` | Get task instance execution details |
-| `get_task_logs` | Get logs for a specific task instance execution |
+| `get_task_logs` | Get logs for a specific task instance |
 | `list_pools` | Get all resource pools |
 | `get_pool` | Get details about a specific pool |
 | `list_variables` | Get all Airflow variables |
 | `get_variable` | Get a specific variable by key |
-| `list_connections` | Get all connections (credentials excluded for security) |
-| `list_assets` | Get assets/datasets (unified naming across versions) |
+| `list_connections` | Get all connections (credentials excluded) |
+| `list_assets` | Get assets/datasets (unified naming across Airflow versions) |
 | `list_plugins` | Get installed Airflow plugins |
 | `list_providers` | Get installed provider packages |
 | `get_airflow_config` | Get Airflow configuration |
@@ -211,69 +197,49 @@ claude mcp add airflow -e AIRFLOW_API_URL=https://your-airflow.example.com -e AI
 | `daily_health_check` | Morning health check routine |
 | `onboard_new_dag` | Guide for understanding a new DAG |
 
-## Advanced Usage
+## CLI Options
 
-### Running as Standalone Server
+### `astro-airflow-mcp` (server)
 
-For HTTP-based integrations or connecting multiple clients to one server:
+| Environment Variable | Description |
+|---------------------|-------------|
+| `AIRFLOW_API_URL` | Airflow webserver URL |
+| `AUTH0_DOMAIN` | Auth0 tenant domain |
+| `AUTH0_CLIENT_ID` | Auth0 client ID |
 
-```bash
-# Run server (HTTP mode is default)
-uvx astro-airflow-mcp --airflow-url https://my-airflow.example.com --username admin --password admin
-```
+### `astro-airflow-mcp-login` (authentication)
 
-Connect MCP clients to: `http://localhost:8000/mcp`
-
-### Airflow Plugin Mode
-
-Install into your Airflow 3.x environment to expose MCP at `http://your-airflow:8080/mcp/v1`:
-
-```bash
-# Add to your Astro project
-echo astro-airflow-mcp >> requirements.txt
-```
-
-### CLI Options
-
-| Flag | Environment Variable | Default | Description |
-|------|---------------------|---------|-------------|
-| `--transport` | `MCP_TRANSPORT` | `stdio` | Transport mode (`stdio` or `http`) |
-| `--host` | `MCP_HOST` | `localhost` | Host to bind to (HTTP mode only) |
-| `--port` | `MCP_PORT` | `8000` | Port to bind to (HTTP mode only) |
-| `--airflow-url` | `AIRFLOW_API_URL` | Auto-discovered or `http://localhost:8080` | Airflow webserver URL |
-| `--airflow-project-dir` | `AIRFLOW_PROJECT_DIR` | `$PWD` | Astro project directory for auto-discovering Airflow URL from `.astro/config.yaml` |
-| `--auth-token` | `AIRFLOW_AUTH_TOKEN` | `None` | Bearer token for authentication |
-| `--username` | `AIRFLOW_USERNAME` | `None` | Username for authentication (Airflow 3.x uses OAuth2 token exchange) |
-| `--password` | `AIRFLOW_PASSWORD` | `None` | Password for authentication |
+| Flag | Description |
+|------|-------------|
+| `--auth0-domain` | Auth0 tenant domain |
+| `--auth0-client-id` | Auth0 client ID |
+| `--auth0-callback-url` | OAuth callback URL on your Airflow instance |
+| `--status` | Check if current token is valid |
+| `--list` | List all stored environment tokens |
 
 ## Architecture
 
-The server is built using [FastMCP](https://github.com/jlowin/fastmcp) with an adapter pattern for Airflow version compatibility:
+```
+src/astro_airflow_mcp/
+├── server.py          # MCP tools, resources, prompts (FastMCP)
+├── auth.py            # Auth0 login flow + per-environment token storage
+├── auth_cli.py        # `astro-airflow-mcp-login` CLI
+├── adapters/
+│   ├── base.py        # Abstract adapter interface
+│   ├── airflow_v2.py  # Airflow 2.x API (/api/v1)
+│   └── airflow_v3.py  # Airflow 3.x API (/api/v2)
+├── models.py          # Pydantic models (type reference)
+└── plugin.py          # Airflow 3.x plugin integration
+```
 
-### Core Components
-
-- **Adapters** (`adapters/`): Version-specific API implementations
-  - `AirflowAdapter` (base): Abstract interface for all Airflow API operations
-  - `AirflowV2Adapter`: Airflow 2.x API (`/api/v1`) with basic auth
-  - `AirflowV3Adapter`: Airflow 3.x API (`/api/v2`) with OAuth2 token exchange
-- **Version Detection**: Automatic detection at startup by probing API endpoints
-- **Models** (`models.py`): Pydantic models for type-safe API responses
-
-### Version Handling Strategy
-
-1. **Major versions (2.x vs 3.x)**: Adapter pattern with runtime version detection
-2. **Minor versions (3.1 vs 3.2)**: Runtime feature detection with graceful fallbacks
-3. **New API parameters**: Pass-through `**kwargs` for forward compatibility
-
-### Deployment Modes
-
-- **Standalone**: Independent ASGI application with HTTP/SSE transport
-- **Plugin**: Mounted into Airflow 3.x FastAPI webserver
+- **Adapter pattern**: Version-specific API implementations behind a common interface
+- **Auto-detection**: Probes API endpoints at startup to determine Airflow version
+- **Per-environment tokens**: Keyed by Auth0 domain so multiple environments coexist
 
 ## Development
 
 ```bash
-# Setup development environment
+# Setup
 make install-dev
 
 # Run tests
@@ -283,8 +249,8 @@ make test
 make check
 
 # Local testing with Astro CLI
-astro dev start  # Start Airflow
-make run         # Run MCP server (connects to localhost:8080)
+astro dev start
+make run
 ```
 
 ## Contributing
@@ -292,4 +258,3 @@ make run         # Run MCP server (connects to localhost:8080)
 Contributions welcome! Please ensure:
 - All tests pass (`make test`)
 - Code passes linting (`make check`)
-- prek hooks pass (`make prek`)

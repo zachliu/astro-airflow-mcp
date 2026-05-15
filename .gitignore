@@ -41,6 +41,12 @@ ENV/
 .coverage
 htmlcov/
 
+# Test tracker (contains instance-specific data)
+mcp-test-tracker.html
+
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code
+.mcp.json

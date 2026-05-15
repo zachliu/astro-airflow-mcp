@@ -6,6 +6,9 @@ from typing import Any
 import httpx
 
 from astro_airflow_mcp.adapters.base import AirflowAdapter, NotFoundError
+from astro_airflow_mcp.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class AirflowV3Adapter(AirflowAdapter):
@@ -151,7 +154,9 @@ class AirflowV3Adapter(AirflowAdapter):
         Returns:
             Details of the triggered DAG run
         """
-        json_body: dict[str, Any] = {"logical_date": logical_date}
+        json_body: dict[str, Any] = {}
+        if logical_date is not None:
+            json_body["logical_date"] = logical_date
         if conf:
             json_body["conf"] = conf
 
@@ -267,10 +272,10 @@ class AirflowV3Adapter(AirflowAdapter):
 
         Args:
             dag_ids: Optional list of DAG IDs to get stats for.
-                     If None, returns stats for all DAGs.
+                     If None, fetches stats for all active (unpaused) DAGs.
 
         Note:
-            Airflow 3.2.0 has bugs where:
+            Airflow 3.2.x has bugs where:
             1. Calling without dag_ids causes a 500 error
             2. Multiple dag_ids in one call causes a 500 error
             3. DAGs with dag_display_name=None cause a 500 error
@@ -280,29 +285,49 @@ class AirflowV3Adapter(AirflowAdapter):
         Available in Airflow 3.0+. Returns counts by DAG and state.
         """
         try:
-            # Workaround for Airflow 3.2.0 bugs
-            if dag_ids:
-                # Call once per DAG to avoid multiple dag_ids bug
-                all_results: dict[str, Any] = {"dags": [], "total_entries": 0, "errors": []}
-                for dag_id in dag_ids:
-                    try:
-                        result = self._call("dagStats", params={"dag_ids": dag_id})
-                        all_results["dags"].extend(result.get("dags", []))
-                        all_results["total_entries"] += result.get("total_entries", 0)
-                    except Exception as e:
-                        # Some DAGs may fail due to dag_display_name=None bug
-                        all_results["errors"].append(
-                            {
-                                "dag_id": dag_id,
-                                "error": str(e),
-                                "note": "Airflow 3.2.0 bug: dag_display_name may be None",
-                            }
+            if not dag_ids:
+                dags_data = self._call("dags", params={"limit": 100, "offset": 0, "paused": False})
+                all_dags = list(dags_data.get("dags", []))
+                total = dags_data.get("total_entries")
+                if total:
+                    while len(all_dags) < total:
+                        page = self._call(
+                            "dags",
+                            params={"limit": 100, "offset": len(all_dags), "paused": False},
                         )
-                if not all_results["errors"]:
-                    del all_results["errors"]
-                return all_results
-            # Pass empty dag_ids to avoid 500 error
-            return self._call("dagStats", params={"dag_ids": ""})
+                        batch = page.get("dags", [])
+                        if not batch:
+                            break
+                        all_dags.extend(batch)
+                dag_ids = [d["dag_id"] for d in all_dags]
+
+            if not dag_ids:
+                return {"dags": [], "total_entries": 0}
+
+            if len(dag_ids) > 50:
+                logger.warning(
+                    "get_dag_stats: fetching stats for %d DAGs individually (N+1 workaround). "
+                    "This may be slow.",
+                    len(dag_ids),
+                )
+
+            all_results: dict[str, Any] = {"dags": [], "total_entries": 0, "errors": []}
+            for dag_id in dag_ids:
+                try:
+                    result = self._call("dagStats", params={"dag_ids": dag_id})
+                    all_results["dags"].extend(result.get("dags", []))
+                    all_results["total_entries"] += result.get("total_entries", 0)
+                except Exception as e:
+                    all_results["errors"].append(
+                        {
+                            "dag_id": dag_id,
+                            "error": str(e),
+                            "note": "Airflow 3.2.x bug: dag_display_name may be None",
+                        }
+                    )
+            if not all_results["errors"]:
+                del all_results["errors"]
+            return all_results
         except NotFoundError:
             return self._handle_not_found(
                 "dagStats", alternative="Use list_dag_runs to compute statistics"
