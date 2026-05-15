@@ -47,3 +47,6 @@ mcp-test-tracker.html
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code
+.mcp.json
