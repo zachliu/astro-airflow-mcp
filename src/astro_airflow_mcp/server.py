@@ -418,8 +418,11 @@ def _list_dags_impl(
 ) -> str:
     """Internal implementation for listing DAGs from Airflow.
 
+    Automatically paginates through all results when using the default
+    offset of 0, so the caller gets the complete DAG list.
+
     Args:
-        limit: Maximum number of DAGs to return (default: 100)
+        limit: Page size per request (default: 100)
         offset: Offset for pagination (default: 0)
 
     Returns:
@@ -429,9 +432,22 @@ def _list_dags_impl(
         adapter = _get_adapter()
         data = adapter.list_dags(limit=limit, offset=offset)
 
-        if "dags" in data:
-            return _wrap_list_response(data["dags"], "dags", data)
-        return f"No DAGs found. Response: {data}"
+        if "dags" not in data:
+            return f"No DAGs found. Response: {data}"
+
+        all_dags = list(data["dags"])
+        total = data.get("total_entries") or data.get("total_dags")
+
+        if total and offset == 0:
+            while len(all_dags) < total:
+                page = adapter.list_dags(limit=limit, offset=len(all_dags))
+                batch = page.get("dags", [])
+                if not batch:
+                    break
+                all_dags.extend(batch)
+
+        data["dags"] = all_dags
+        return _wrap_list_response(all_dags, "dags", data)
     except Exception as e:
         return str(e)
 
