@@ -7,6 +7,7 @@ from pathlib import Path
 
 import yaml
 
+from astro_airflow_mcp.auth import get_access_token
 from astro_airflow_mcp.logging import configure_logging, get_logger
 from astro_airflow_mcp.server import configure, mcp
 
@@ -112,6 +113,30 @@ def main():
         default=os.getenv("AIRFLOW_PROJECT_DIR") or os.getenv("PWD") or os.getcwd(),
         help="Astro project directory for auto-discovering Airflow URL from .astro/config.yaml (default: $PWD)",
     )
+    parser.add_argument(
+        "--auth0-domain",
+        type=str,
+        default=os.getenv("AUTH0_DOMAIN"),
+        help="Auth0 tenant domain (e.g., '<your-domain>.us.auth0.com')",
+    )
+    parser.add_argument(
+        "--auth0-client-id",
+        type=str,
+        default=os.getenv("AUTH0_CLIENT_ID"),
+        help="Auth0 application client ID",
+    )
+    parser.add_argument(
+        "--auth0-audience",
+        type=str,
+        default=os.getenv("AUTH0_AUDIENCE"),
+        help="Auth0 API audience identifier",
+    )
+    parser.add_argument(
+        "--auth0-callback-url",
+        type=str,
+        default=os.getenv("AUTH0_CALLBACK_URL"),
+        help="OAuth callback URL (e.g., 'https://<your-domain>/oauth/mcp-callback')",
+    )
 
     args = parser.parse_args()
 
@@ -131,10 +156,24 @@ def main():
             airflow_url = DEFAULT_AIRFLOW_URL
             url_source = "default"
 
+    # Resolve auth token: explicit > stored Airflow JWT > username/password > credential-less
+    auth_token = args.auth_token
+    if not auth_token and args.auth0_domain and args.auth0_client_id:
+        auth_token = get_access_token(
+            auth0_domain=args.auth0_domain,
+            client_id=args.auth0_client_id,
+        )
+        if not auth_token:
+            logger.error(
+                "No valid token found. "
+                "Run `astro-airflow-mcp-login` first to authenticate."
+            )
+            raise SystemExit(1)
+
     # Configure Airflow connection settings
     configure(
         url=airflow_url,
-        auth_token=args.auth_token,
+        auth_token=auth_token,
         username=args.username,
         password=args.password,
         project_dir=args.airflow_project_dir,
@@ -143,7 +182,9 @@ def main():
     # Log configuration
     logger.info("Project directory: %s", args.airflow_project_dir)
     logger.info("Airflow URL: %s (%s)", airflow_url, url_source)
-    if args.auth_token:
+    if auth_token and args.auth0_domain:
+        logger.info("Authentication: Airflow JWT via Auth0 (domain: %s)", args.auth0_domain)
+    elif auth_token:
         logger.info("Authentication: Direct bearer token")
     elif args.username:
         logger.info("Authentication: Token manager (username: %s)", args.username)
