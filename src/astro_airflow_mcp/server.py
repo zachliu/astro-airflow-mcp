@@ -2224,29 +2224,11 @@ def explore_dag(dag_id: str) -> str:
     except Exception as e:
         result["dag_info"] = {"error": str(e)}
 
-    # Get tasks (trimmed to essential fields to avoid blowing up context)
-    # All available fields from Airflow API:
-    #   task_id, task_display_name, owner, start_date, end_date,
-    #   trigger_rule, depends_on_past, wait_for_downstream, retries,
-    #   queue, pool, pool_slots, execution_timeout, retry_delay,
-    #   retry_exponential_backoff, priority_weight, weight_rule,
-    #   ui_color, ui_fgcolor, template_fields, downstream_task_ids,
-    #   doc_md, operator_name, params, class_ref, is_mapped, extra_links
+    # Get tasks (trimmed via TASK_ESSENTIAL_FIELDS to avoid context overflow)
     try:
         tasks_data = adapter.list_tasks(dag_id)
-        keep_fields = {
-            "task_id",
-            "task_display_name",
-            "operator_name",
-            "owner",
-            "pool",
-            "trigger_rule",
-            "retries",
-            "downstream_task_ids",
-            "is_mapped",
-        }
         result["tasks"] = [
-            {k: v for k, v in t.items() if k in keep_fields}
+            {k: v for k, v in t.items() if k in TASK_ESSENTIAL_FIELDS}
             for t in tasks_data.get("tasks", [])
         ]
     except Exception as e:
