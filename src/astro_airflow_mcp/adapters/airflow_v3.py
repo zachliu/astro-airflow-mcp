@@ -361,8 +361,9 @@ class AirflowV3Adapter(AirflowAdapter):
     ) -> dict[str, Any]:
         """Clear specific task instances."""
         return self._post(
-            f"dags/{dag_id}/dagRuns/{dag_run_id}/clearTaskInstances",
+            f"dags/{dag_id}/clearTaskInstances",
             json_data={
+                "dag_run_id": dag_run_id,
                 "task_ids": task_ids,
                 "only_failed": only_failed,
                 "include_downstream": include_downstream,
