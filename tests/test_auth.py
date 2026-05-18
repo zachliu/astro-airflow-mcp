@@ -3,8 +3,6 @@
 import json
 import time
 
-import pytest
-
 from astro_airflow_mcp.auth import (
     LEGACY_TOKEN_FILE,
     TOKEN_DIR,
