@@ -2,8 +2,13 @@
 
 import json
 
-from astro_airflow_mcp.server import _config, mcp
-from astro_airflow_mcp.tools._common import _environment_label, _get_adapter, _wrap_list_response
+from astro_airflow_mcp.server import mcp
+from astro_airflow_mcp.tools._common import (
+    _environment_label,
+    _get_adapter,
+    _get_config_url,
+    _wrap_list_response,
+)
 
 DEFAULT_LIMIT = 100
 DEFAULT_OFFSET = 0
@@ -182,7 +187,7 @@ def get_current_environment() -> str:
         JSON with the current Airflow URL and environment label
     """
     result = {
-        "airflow_url": _config.url,
+        "airflow_url": _get_config_url(),
         "environment": _environment_label(),
     }
     try:

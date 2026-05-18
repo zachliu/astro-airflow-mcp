@@ -19,6 +19,10 @@ def _wrap_list_response(items: list[dict[str, Any]], key_name: str, data: dict[s
     return _server._wrap_list_response(items, key_name, data)
 
 
+def _get_config_url() -> str:
+    return _server._config.url
+
+
 def _is_read_only() -> bool:
     return os.getenv("AF_READ_ONLY", "").lower() in ("true", "1", "yes")
 

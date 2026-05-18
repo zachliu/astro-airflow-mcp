@@ -1,7 +1,6 @@
 """FastMCP server for Airflow integration."""
 
 import json
-import os
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -312,22 +311,6 @@ def _invalidate_token() -> None:
     if _config.token_manager:
         _config.token_manager.invalidate()
 
-
-def _is_read_only() -> bool:
-    return os.getenv("AF_READ_ONLY", "").lower() in ("true", "1", "yes")
-
-
-def _check_write_allowed(operation_name: str) -> str | None:
-    if _is_read_only():
-        return json.dumps(
-            {
-                "error": "Write operation blocked",
-                "operation": operation_name,
-                "reason": "Server is in read-only mode (AF_READ_ONLY=true)",
-            },
-            indent=2,
-        )
-    return None
 
 
 # Helper functions for response formatting
