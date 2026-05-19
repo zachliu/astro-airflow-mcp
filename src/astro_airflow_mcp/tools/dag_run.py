@@ -287,6 +287,10 @@ def _trigger_dag_and_wait_impl(
                 "elapsed_seconds": round(time.time() - start_time, 2),
             }
 
+            if trigger_data.get("_auto_unpaused"):
+                result["_auto_unpaused"] = True
+                result["_warning"] = trigger_data["_warning"]
+
             if current_state != "success":
                 failed_tasks = _get_failed_task_instances(
                     dag_id=dag_id,
