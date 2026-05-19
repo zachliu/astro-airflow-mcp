@@ -549,6 +549,11 @@ def _clear_task_instances_impl(
     blocked = _check_write_allowed("clear_task_instances")
     if blocked:
         return blocked
+    if not task_ids:
+        return json.dumps(
+            {"error": "task_ids cannot be empty. Specify at least one task ID to clear."},
+            indent=2,
+        )
     try:
         adapter = _get_adapter()
         data = adapter.clear_task_instances(
