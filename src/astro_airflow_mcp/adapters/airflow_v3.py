@@ -148,15 +148,17 @@ class AirflowV3Adapter(AirflowAdapter):
 
         Args:
             dag_id: The ID of the DAG to trigger
-            logical_date: Optional logical date for the run (can be null in Airflow 3)
+            logical_date: Optional logical date for the run (defaults to now)
             conf: Optional configuration dictionary to pass to the DAG run
 
         Returns:
             Details of the triggered DAG run
         """
-        json_body: dict[str, Any] = {}
-        if logical_date is not None:
-            json_body["logical_date"] = logical_date
+        from datetime import datetime, timezone
+
+        json_body: dict[str, Any] = {
+            "logical_date": logical_date or datetime.now(timezone.utc).isoformat(),
+        }
         if conf:
             json_body["conf"] = conf
 
