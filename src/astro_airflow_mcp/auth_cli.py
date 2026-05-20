@@ -5,10 +5,10 @@ import os
 import sys
 
 from astro_airflow_mcp.auth import (
+    _token_file_for_domain,
     get_access_token,
     list_stored_environments,
     login,
-    _token_file_for_domain,
 )
 
 

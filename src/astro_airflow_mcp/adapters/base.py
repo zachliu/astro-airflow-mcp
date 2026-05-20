@@ -411,6 +411,40 @@ class AirflowAdapter(ABC):
     def list_providers(self) -> dict[str, Any]:
         """List installed Airflow provider packages."""
 
+    # Clear Operations
+    @abstractmethod
+    def clear_dag_run(
+        self, dag_id: str, dag_run_id: str, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """Clear all task instances in a DAG run, allowing them to re-run.
+
+        Args:
+            dag_id: DAG ID
+            dag_run_id: DAG run ID
+            dry_run: If True, return tasks that would be cleared without clearing them
+        """
+
+    @abstractmethod
+    def clear_task_instances(
+        self,
+        dag_id: str,
+        dag_run_id: str,
+        task_ids: list[str],
+        only_failed: bool = False,
+        include_downstream: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Clear specific task instances, allowing them to re-run.
+
+        Args:
+            dag_id: DAG ID
+            dag_run_id: DAG run ID
+            task_ids: List of task IDs to clear
+            only_failed: Only clear failed task instances
+            include_downstream: Also clear downstream tasks
+            dry_run: If True, return tasks that would be cleared without clearing them
+        """
+
     # System Operations
     @abstractmethod
     def get_version(self) -> dict[str, Any]:

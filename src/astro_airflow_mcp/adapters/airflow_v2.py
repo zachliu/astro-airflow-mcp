@@ -297,6 +297,36 @@ class AirflowV2Adapter(AirflowAdapter):
         """List import errors from DAG files."""
         return self._call("importErrors", params={"limit": limit, "offset": offset})
 
+    def clear_dag_run(
+        self, dag_id: str, dag_run_id: str, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """Clear all task instances in a DAG run."""
+        return self._post(
+            f"dags/{dag_id}/clearTaskInstances",
+            json_data={"dag_run_id": dag_run_id, "dry_run": dry_run},
+        )
+
+    def clear_task_instances(
+        self,
+        dag_id: str,
+        dag_run_id: str,
+        task_ids: list[str],
+        only_failed: bool = False,
+        include_downstream: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Clear specific task instances."""
+        return self._post(
+            f"dags/{dag_id}/clearTaskInstances",
+            json_data={
+                "dag_run_id": dag_run_id,
+                "task_ids": task_ids,
+                "only_failed": only_failed,
+                "include_downstream": include_downstream,
+                "dry_run": dry_run,
+            },
+        )
+
     def list_plugins(self, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         """List installed Airflow plugins."""
         return self._call("plugins", params={"limit": limit, "offset": offset})

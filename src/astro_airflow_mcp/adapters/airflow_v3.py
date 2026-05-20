@@ -148,15 +148,17 @@ class AirflowV3Adapter(AirflowAdapter):
 
         Args:
             dag_id: The ID of the DAG to trigger
-            logical_date: Optional logical date for the run (can be null in Airflow 3)
+            logical_date: Optional logical date for the run (defaults to now)
             conf: Optional configuration dictionary to pass to the DAG run
 
         Returns:
             Details of the triggered DAG run
         """
-        json_body: dict[str, Any] = {}
-        if logical_date is not None:
-            json_body["logical_date"] = logical_date
+        from datetime import datetime, timezone
+
+        json_body: dict[str, Any] = {
+            "logical_date": logical_date or datetime.now(timezone.utc).isoformat(),
+        }
         if conf:
             json_body["conf"] = conf
 
@@ -340,6 +342,36 @@ class AirflowV3Adapter(AirflowAdapter):
     def list_import_errors(self, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         """List import errors from DAG files."""
         return self._call("importErrors", params={"limit": limit, "offset": offset})
+
+    def clear_dag_run(
+        self, dag_id: str, dag_run_id: str, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """Clear all task instances in a DAG run."""
+        return self._post(
+            f"dags/{dag_id}/dagRuns/{dag_run_id}/clear",
+            json_data={"dry_run": dry_run},
+        )
+
+    def clear_task_instances(
+        self,
+        dag_id: str,
+        dag_run_id: str,
+        task_ids: list[str],
+        only_failed: bool = False,
+        include_downstream: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Clear specific task instances."""
+        return self._post(
+            f"dags/{dag_id}/clearTaskInstances",
+            json_data={
+                "dag_run_id": dag_run_id,
+                "task_ids": task_ids,
+                "only_failed": only_failed,
+                "include_downstream": include_downstream,
+                "dry_run": dry_run,
+            },
+        )
 
     def list_plugins(self, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         """List installed Airflow plugins."""
