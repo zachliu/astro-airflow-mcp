@@ -115,12 +115,14 @@ class AirflowAdapter(ABC):
         self,
         endpoint: str,
         json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Make HTTP POST call to Airflow API.
 
         Args:
             endpoint: API endpoint path (without base path)
             json_data: JSON body to send
+            params: Optional query parameters
 
         Returns:
             Parsed JSON response
@@ -135,7 +137,7 @@ class AirflowAdapter(ABC):
         url = f"{self.airflow_url}{self.api_base_path}/{endpoint}"
 
         with httpx.Client(timeout=30.0) as client:
-            response = client.post(url, json=json_data, headers=headers, auth=auth)
+            response = client.post(url, json=json_data, params=params, headers=headers, auth=auth)
 
             if response.status_code == 404:
                 raise NotFoundError(endpoint)
@@ -443,6 +445,36 @@ class AirflowAdapter(ABC):
             only_failed: Only clear failed task instances
             include_downstream: Also clear downstream tasks
             dry_run: If True, return tasks that would be cleared without clearing them
+        """
+
+    # Batch Task Instance Operations
+    @abstractmethod
+    def list_task_instances_batch(
+        self,
+        dag_ids: list[str] | None = None,
+        pool: list[str] | None = None,
+        state: list[str] | None = None,
+        logical_date_gte: str | None = None,
+        logical_date_lte: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Query task instances across multiple DAGs with filters.
+
+        This is a batch endpoint that can search task instances across all DAGs
+        without specifying a specific DAG or run.
+
+        Args:
+            dag_ids: Filter to specific DAG IDs
+            pool: Filter by pool names
+            state: Filter by task states (e.g., ["success", "failed"])
+            logical_date_gte: Only include runs on or after this date (ISO 8601)
+            logical_date_lte: Only include runs on or before this date (ISO 8601)
+            limit: Maximum number of instances to return
+            offset: Offset for pagination
+
+        Returns:
+            Dict with 'task_instances' list and 'total_entries' count
         """
 
     # System Operations

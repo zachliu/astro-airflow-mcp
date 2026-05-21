@@ -1,6 +1,8 @@
 """DAG metadata and configuration tools."""
 
 import json
+import re
+from typing import Any
 
 from astro_airflow_mcp.logging import get_logger
 from astro_airflow_mcp.server import mcp
@@ -60,12 +62,21 @@ def get_dag_details(dag_id: str) -> str:
 
 
 def _list_dags_impl(
+    tags: list[str] | None = None,
+    paused: bool | None = None,
+    dag_id_pattern: str | None = None,
     limit: int = DEFAULT_LIMIT,
     offset: int = DEFAULT_OFFSET,
 ) -> str:
     try:
         adapter = _get_adapter()
-        data = adapter.list_dags(limit=limit, offset=offset)
+        kwargs: dict[str, Any] = {}
+        if tags:
+            kwargs["tags"] = tags
+        if paused is not None:
+            kwargs["paused"] = paused
+
+        data = adapter.list_dags(limit=limit, offset=offset, **kwargs)
 
         if "dags" not in data:
             return f"No DAGs found. Response: {data}"
@@ -81,11 +92,15 @@ def _list_dags_impl(
                     total,
                 )
             while len(all_dags) < total:
-                page = adapter.list_dags(limit=limit, offset=len(all_dags))
+                page = adapter.list_dags(limit=limit, offset=len(all_dags), **kwargs)
                 batch = page.get("dags", [])
                 if not batch:
                     break
                 all_dags.extend(batch)
+
+        if dag_id_pattern:
+            pattern = re.compile(dag_id_pattern, re.IGNORECASE)
+            all_dags = [d for d in all_dags if pattern.search(d.get("dag_id", ""))]
 
         data["dags"] = all_dags
         return _wrap_list_response(all_dags, "dags", data)
@@ -94,15 +109,20 @@ def _list_dags_impl(
 
 
 @mcp.tool()
-def list_dags() -> str:
-    """Get information about all Apache Airflow DAGs (Directed Acyclic Graphs).
+def list_dags(
+    tags: list[str] | None = None,
+    paused: bool | None = None,
+    dag_id_pattern: str | None = None,
+) -> str:
+    """Get information about Apache Airflow DAGs with optional filtering.
 
     Use this tool when the user asks about:
     - "What DAGs are available?" or "List all DAGs"
     - "Show me the workflows" or "What pipelines exist?"
     - "Which DAGs are paused/active?"
+    - "Show me all DAGs tagged 'clean'" or "List daily DAGs"
+    - "Find DAGs matching 'client_name'" or "How many DAGs are active?"
     - DAG schedules, descriptions, or tags
-    - Finding a specific DAG by name
 
     Returns comprehensive DAG metadata including:
     - dag_id: Unique identifier for the DAG
@@ -114,10 +134,18 @@ def list_dags() -> str:
     - owners: Who maintains the DAG
     - file_token: Location of the DAG file
 
+    Args:
+        tags: Filter by tags (only DAGs with ALL specified tags are returned).
+              Example: ["clean", "daily"] returns DAGs tagged with both.
+        paused: Filter by paused status. True = only paused DAGs,
+                False = only active DAGs, None = all DAGs.
+        dag_id_pattern: Regex pattern to filter DAG IDs (case-insensitive).
+                        Example: "^my_client_" or ".*daily.*"
+
     Returns:
-        JSON with list of all DAGs and their complete metadata
+        JSON with list of matching DAGs and their complete metadata
     """
-    return _list_dags_impl()
+    return _list_dags_impl(tags=tags, paused=paused, dag_id_pattern=dag_id_pattern)
 
 
 def _get_dag_source_impl(dag_id: str) -> str:
@@ -150,6 +178,168 @@ def get_dag_source(dag_id: str) -> str:
         JSON with DAG source code and metadata
     """
     return _get_dag_source_impl(dag_id=dag_id)
+
+
+def _search_dag_source_impl(
+    search_pattern: str,
+    tags: list[str] | None = None,
+    paused: bool | None = None,
+    dag_id_pattern: str | None = None,
+    context_lines: int = 2,
+    limit: int = 50,
+    invert: bool = False,
+) -> str:
+    try:
+        adapter = _get_adapter()
+        kwargs: dict[str, Any] = {}
+        if tags:
+            kwargs["tags"] = tags
+        if paused is not None:
+            kwargs["paused"] = paused
+
+        all_dags: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            data = adapter.list_dags(limit=100, offset=offset, **kwargs)
+            batch = data.get("dags", [])
+            if not batch:
+                break
+            all_dags.extend(batch)
+            total = data.get("total_entries")
+            if total and len(all_dags) >= total:
+                break
+            offset += 100
+
+        if dag_id_pattern:
+            id_re = re.compile(dag_id_pattern, re.IGNORECASE)
+            all_dags = [d for d in all_dags if id_re.search(d.get("dag_id", ""))]
+
+        search_re = re.compile(search_pattern, re.IGNORECASE)
+        matches: list[dict[str, Any]] = []
+        non_matches: list[dict[str, Any]] = []
+        errors = 0
+        matched_count = 0
+
+        for dag_info in all_dags:
+            dag_id = dag_info["dag_id"]
+            try:
+                source_data = adapter.get_dag_source(dag_id)
+            except Exception:
+                errors += 1
+                continue
+            content = source_data.get("content", "")
+            lines = content.split("\n")
+            matched_snippets: list[str] = []
+            for i, line in enumerate(lines):
+                if search_re.search(line):
+                    start = max(0, i - context_lines)
+                    end = min(len(lines), i + context_lines + 1)
+                    snippet = "\n".join(
+                        f"{'>' if j == i else ' '} {j + 1}: {lines[j]}"
+                        for j in range(start, end)
+                    )
+                    matched_snippets.append(snippet)
+
+            if matched_snippets:
+                matched_count += 1
+                if not invert and len(matches) < limit:
+                    matches.append({
+                        "dag_id": dag_id,
+                        "is_paused": dag_info.get("is_paused"),
+                        "schedule": dag_info.get("timetable_summary"),
+                        "match_count": len(matched_snippets),
+                        "snippets": matched_snippets[:3],
+                    })
+            else:
+                if invert and len(non_matches) < limit:
+                    non_matches.append({
+                        "dag_id": dag_id,
+                        "is_paused": dag_info.get("is_paused"),
+                        "schedule": dag_info.get("timetable_summary"),
+                    })
+
+        result: dict[str, Any] = {
+            "search_pattern": search_pattern,
+            "invert": invert,
+            "dags_searched": len(all_dags),
+            "dags_matched": matched_count,
+            "dags_not_matched": len(all_dags) - matched_count - errors,
+            "errors": errors,
+        }
+
+        if invert:
+            result["dags"] = non_matches
+            if len(non_matches) >= limit:
+                result["truncated"] = True
+                result["note"] = f"Results capped at {limit}. Use filters to narrow search."
+        else:
+            result["matches"] = matches
+            if len(matches) >= limit:
+                result["truncated"] = True
+                result["note"] = f"Results capped at {limit}. Use filters to narrow search."
+
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return str(e)
+
+
+@mcp.tool()
+def search_dag_source(
+    search_pattern: str,
+    tags: list[str] | None = None,
+    paused: bool | None = None,
+    dag_id_pattern: str | None = None,
+    context_lines: int = 2,
+    limit: int = 50,
+    invert: bool = False,
+) -> str:
+    """Search across DAG source code for a pattern or keyword.
+
+    Use this tool when the user asks about:
+    - "Which DAGs use library X?" or "Find DAGs that call function Y"
+    - "Which DAGs pass the -c flag?" or "Search for pattern in DAG code"
+    - "How many DAGs reference this library/function?"
+    - "Find all DAGs that use FARGATE" or "Which DAGs have this config?"
+    - "Grep across all DAG sources for X"
+    - "Which DAGs DON'T use pattern Y?" (use invert=True)
+    - "Find DAGs missing a certain config" (use invert=True)
+
+    This tool fetches source code for DAGs matching the filters and searches
+    each one for the given pattern. It returns matching DAGs with context
+    snippets showing where the pattern appears.
+
+    With invert=True, returns DAGs that do NOT match the pattern instead -
+    useful for finding DAGs missing a library, config, or flag.
+
+    Performance: ~0.04s per DAG. Searching 200+ DAGs takes ~10 seconds.
+
+    Args:
+        search_pattern: Regex pattern to search for in DAG source code
+                        (case-insensitive). Examples: "PythonOperator",
+                        '"-c"', "FARGATE", "pool.*default"
+        tags: Only search DAGs with ALL specified tags.
+              Example: ["clean"] to only search clean DAGs.
+        paused: Only search paused (True) or active (False) DAGs.
+                None searches all.
+        dag_id_pattern: Regex to pre-filter DAG IDs before fetching source.
+                        Example: "^my_client_" to only search one client's DAGs.
+        context_lines: Number of lines of context around each match (default: 2)
+        limit: Maximum number of DAGs to return (default: 50)
+        invert: If True, return DAGs that do NOT match the pattern instead
+                of those that do. Useful for "which DAGs are missing X?" queries.
+
+    Returns:
+        JSON with search results including matched/non-matched DAGs and counts
+    """
+    return _search_dag_source_impl(
+        search_pattern=search_pattern,
+        tags=tags,
+        paused=paused,
+        dag_id_pattern=dag_id_pattern,
+        context_lines=context_lines,
+        limit=limit,
+        invert=invert,
+    )
 
 
 def _get_dag_stats_impl(dag_ids: list[str] | None = None) -> str:
