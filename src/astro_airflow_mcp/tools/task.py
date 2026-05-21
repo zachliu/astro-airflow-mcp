@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 from astro_airflow_mcp.server import TASK_ESSENTIAL_FIELDS, mcp
 from astro_airflow_mcp.tools._common import _get_adapter, _wrap_list_response
@@ -242,4 +243,114 @@ def get_task_logs(
         task_id=task_id,
         try_number=try_number,
         map_index=map_index,
+    )
+
+
+def _list_task_instances_batch_impl(
+    pool: list[str] | None = None,
+    state: list[str] | None = None,
+    dag_ids: list[str] | None = None,
+    logical_date_gte: str | None = None,
+    logical_date_lte: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> str:
+    try:
+        adapter = _get_adapter()
+        data = adapter.list_task_instances_batch(
+            dag_ids=dag_ids,
+            pool=pool,
+            state=state,
+            logical_date_gte=logical_date_gte,
+            logical_date_lte=logical_date_lte,
+            limit=limit,
+            offset=offset,
+        )
+
+        task_instances = data.get("task_instances", [])
+        total = data.get("total_entries", len(task_instances))
+
+        trimmed: list[dict[str, Any]] = []
+        for ti in task_instances:
+            trimmed.append({
+                "dag_id": ti.get("dag_id"),
+                "task_id": ti.get("task_id"),
+                "dag_run_id": ti.get("dag_run_id"),
+                "state": ti.get("state"),
+                "logical_date": ti.get("logical_date"),
+                "start_date": ti.get("start_date"),
+                "end_date": ti.get("end_date"),
+                "duration": ti.get("duration"),
+                "pool": ti.get("pool"),
+                "operator": ti.get("operator_name"),
+                "try_number": ti.get("try_number"),
+            })
+
+        result: dict[str, Any] = {
+            "total_entries": total,
+            "returned_count": len(trimmed),
+            "offset": offset,
+            "task_instances": trimmed,
+        }
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return str(e)
+
+
+@mcp.tool()
+def list_task_instances_batch(
+    pool: list[str] | None = None,
+    state: list[str] | None = None,
+    dag_ids: list[str] | None = None,
+    logical_date_gte: str | None = None,
+    logical_date_lte: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> str:
+    """Query task instances across multiple DAGs with filters.
+
+    Use this tool when the user asks about:
+    - "How many ETL tasks ran today?"
+    - "Show me all failed tasks in pool X"
+    - "What tasks are running right now across all DAGs?"
+    - "List all task instances for these DAGs from this week"
+    - "How many tasks use the heavy_compute pool?"
+    - "Show me tasks that failed yesterday"
+
+    This is a powerful batch query that searches across ALL DAGs without
+    needing to specify a specific DAG or run. Supports filtering by pool,
+    state, date range, and DAG IDs.
+
+    Returns trimmed task instance data including:
+    - dag_id: Which DAG this task belongs to
+    - task_id: The task name
+    - dag_run_id: Which run this instance is part of
+    - state: Current state (success, failed, running, queued, etc.)
+    - logical_date: The logical/execution date
+    - start_date/end_date: When it ran
+    - duration: How long it took (seconds)
+    - pool: Resource pool assignment
+    - operator: Operator type
+
+    Args:
+        pool: Filter by pool names. Example: ["etl_pool", "default_pool"]
+        state: Filter by task states. Example: ["failed", "success"]
+        dag_ids: Filter to specific DAG IDs.
+        logical_date_gte: Only tasks from runs on or after this date (ISO 8601).
+                          Example: "2026-05-21T00:00:00Z"
+        logical_date_lte: Only tasks from runs on or before this date (ISO 8601).
+        limit: Maximum instances to return (default: 100, max varies by server)
+        offset: Pagination offset (default: 0)
+
+    Returns:
+        JSON with matching task instances, total count, and pagination info
+    """
+    return _list_task_instances_batch_impl(
+        pool=pool,
+        state=state,
+        dag_ids=dag_ids,
+        logical_date_gte=logical_date_gte,
+        logical_date_lte=logical_date_lte,
+        limit=limit,
+        offset=offset,
     )

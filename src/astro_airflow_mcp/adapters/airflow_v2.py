@@ -327,6 +327,38 @@ class AirflowV2Adapter(AirflowAdapter):
             },
         )
 
+    def list_task_instances_batch(
+        self,
+        dag_ids: list[str] | None = None,
+        pool: list[str] | None = None,
+        state: list[str] | None = None,
+        logical_date_gte: str | None = None,
+        logical_date_lte: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Query task instances across all DAGs using the batch endpoint.
+
+        Uses POST /api/v1/dags/~/dagRuns/~/taskInstances/list
+        """
+        body: dict[str, Any] = {}
+        if dag_ids:
+            body["dag_ids"] = dag_ids
+        if pool:
+            body["pool"] = pool
+        if state:
+            body["state"] = state
+        if logical_date_gte:
+            body["execution_date_gte"] = logical_date_gte
+        if logical_date_lte:
+            body["execution_date_lte"] = logical_date_lte
+
+        return self._post(
+            "dags/~/dagRuns/~/taskInstances/list",
+            json_data=body,
+            params={"limit": limit, "offset": offset},
+        )
+
     def list_plugins(self, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         """List installed Airflow plugins."""
         return self._call("plugins", params={"limit": limit, "offset": offset})
