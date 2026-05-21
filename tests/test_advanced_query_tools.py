@@ -197,7 +197,8 @@ class TestSearchDagSource:
         mock_adapter.get_dag_source.return_value = {"content": "matching_pattern here"}
 
         result = json.loads(_search_dag_source_impl("matching_pattern", limit=3))
-        assert result["dags_matched"] == 3
+        assert len(result["matches"]) == 3
+        assert result["dags_matched"] == 10
         assert result["truncated"] is True
 
     def test_search_context_lines(self, mock_adapter):
@@ -215,6 +216,68 @@ class TestSearchDagSource:
         assert "line2" in snippet
         assert "target_line" in snippet
         assert "line4" in snippet
+
+    def test_search_invert_returns_non_matches(self, mock_adapter):
+        from astro_airflow_mcp.tools.dag import _search_dag_source_impl
+
+        mock_adapter.list_dags.return_value = {
+            "dags": [
+                {"dag_id": "dag_with_pattern", "is_paused": False, "timetable_summary": "daily"},
+                {"dag_id": "dag_without_pattern", "is_paused": False, "timetable_summary": "hourly"},
+                {"dag_id": "another_without", "is_paused": True, "timetable_summary": "weekly"},
+            ],
+            "total_entries": 3,
+        }
+        mock_adapter.get_dag_source.side_effect = [
+            {"content": "some code with FARGATE config"},
+            {"content": "some code without the pattern"},
+            {"content": "also missing it"},
+        ]
+
+        result = json.loads(_search_dag_source_impl("FARGATE", invert=True))
+        assert result["invert"] is True
+        assert result["dags_searched"] == 3
+        assert result["dags_matched"] == 1
+        assert result["dags_not_matched"] == 2
+        assert len(result["dags"]) == 2
+        dag_ids = [d["dag_id"] for d in result["dags"]]
+        assert "dag_without_pattern" in dag_ids
+        assert "another_without" in dag_ids
+        assert "dag_with_pattern" not in dag_ids
+
+    def test_search_invert_false_still_returns_matches(self, mock_adapter):
+        from astro_airflow_mcp.tools.dag import _search_dag_source_impl
+
+        mock_adapter.list_dags.return_value = {
+            "dags": [
+                {"dag_id": "dag_a", "is_paused": False},
+                {"dag_id": "dag_b", "is_paused": False},
+            ],
+            "total_entries": 2,
+        }
+        mock_adapter.get_dag_source.side_effect = [
+            {"content": "uses PythonOperator"},
+            {"content": "no match here"},
+        ]
+
+        result = json.loads(_search_dag_source_impl("PythonOperator", invert=False))
+        assert result["invert"] is False
+        assert result["dags_matched"] == 1
+        assert "matches" in result
+        assert "dags" not in result
+
+    def test_search_invert_respects_limit(self, mock_adapter):
+        from astro_airflow_mcp.tools.dag import _search_dag_source_impl
+
+        mock_adapter.list_dags.return_value = {
+            "dags": [{"dag_id": f"dag_{i}", "is_paused": False} for i in range(10)],
+            "total_entries": 10,
+        }
+        mock_adapter.get_dag_source.return_value = {"content": "no match here"}
+
+        result = json.loads(_search_dag_source_impl("nonexistent", invert=True, limit=3))
+        assert len(result["dags"]) == 3
+        assert result["truncated"] is True
 
 
 class TestListTaskInstancesBatch:

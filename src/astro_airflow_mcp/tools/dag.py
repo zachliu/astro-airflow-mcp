@@ -187,6 +187,7 @@ def _search_dag_source_impl(
     dag_id_pattern: str | None = None,
     context_lines: int = 2,
     limit: int = 50,
+    invert: bool = False,
 ) -> str:
     try:
         adapter = _get_adapter()
@@ -215,7 +216,9 @@ def _search_dag_source_impl(
 
         search_re = re.compile(search_pattern, re.IGNORECASE)
         matches: list[dict[str, Any]] = []
+        non_matches: list[dict[str, Any]] = []
         errors = 0
+        matched_count = 0
 
         for dag_info in all_dags:
             dag_id = dag_info["dag_id"]
@@ -238,26 +241,43 @@ def _search_dag_source_impl(
                     matched_snippets.append(snippet)
 
             if matched_snippets:
-                matches.append({
-                    "dag_id": dag_id,
-                    "is_paused": dag_info.get("is_paused"),
-                    "schedule": dag_info.get("timetable_summary"),
-                    "match_count": len(matched_snippets),
-                    "snippets": matched_snippets[:3],
-                })
-                if len(matches) >= limit:
-                    break
+                matched_count += 1
+                if not invert and len(matches) < limit:
+                    matches.append({
+                        "dag_id": dag_id,
+                        "is_paused": dag_info.get("is_paused"),
+                        "schedule": dag_info.get("timetable_summary"),
+                        "match_count": len(matched_snippets),
+                        "snippets": matched_snippets[:3],
+                    })
+            else:
+                if invert and len(non_matches) < limit:
+                    non_matches.append({
+                        "dag_id": dag_id,
+                        "is_paused": dag_info.get("is_paused"),
+                        "schedule": dag_info.get("timetable_summary"),
+                    })
 
         result: dict[str, Any] = {
             "search_pattern": search_pattern,
+            "invert": invert,
             "dags_searched": len(all_dags),
-            "dags_matched": len(matches),
+            "dags_matched": matched_count,
+            "dags_not_matched": len(all_dags) - matched_count - errors,
             "errors": errors,
-            "matches": matches,
         }
-        if len(matches) >= limit:
-            result["truncated"] = True
-            result["note"] = f"Results capped at {limit}. Use filters to narrow search."
+
+        if invert:
+            result["dags"] = non_matches
+            if len(non_matches) >= limit:
+                result["truncated"] = True
+                result["note"] = f"Results capped at {limit}. Use filters to narrow search."
+        else:
+            result["matches"] = matches
+            if len(matches) >= limit:
+                result["truncated"] = True
+                result["note"] = f"Results capped at {limit}. Use filters to narrow search."
+
         return json.dumps(result, indent=2)
     except Exception as e:
         return str(e)
@@ -271,6 +291,7 @@ def search_dag_source(
     dag_id_pattern: str | None = None,
     context_lines: int = 2,
     limit: int = 50,
+    invert: bool = False,
 ) -> str:
     """Search across DAG source code for a pattern or keyword.
 
@@ -280,10 +301,15 @@ def search_dag_source(
     - "How many DAGs reference this library/function?"
     - "Find all DAGs that use FARGATE" or "Which DAGs have this config?"
     - "Grep across all DAG sources for X"
+    - "Which DAGs DON'T use pattern Y?" (use invert=True)
+    - "Find DAGs missing a certain config" (use invert=True)
 
     This tool fetches source code for DAGs matching the filters and searches
     each one for the given pattern. It returns matching DAGs with context
     snippets showing where the pattern appears.
+
+    With invert=True, returns DAGs that do NOT match the pattern instead -
+    useful for finding DAGs missing a library, config, or flag.
 
     Performance: ~0.04s per DAG. Searching 200+ DAGs takes ~10 seconds.
 
@@ -298,11 +324,12 @@ def search_dag_source(
         dag_id_pattern: Regex to pre-filter DAG IDs before fetching source.
                         Example: "^my_client_" to only search one client's DAGs.
         context_lines: Number of lines of context around each match (default: 2)
-        limit: Maximum number of matching DAGs to return (default: 50)
+        limit: Maximum number of DAGs to return (default: 50)
+        invert: If True, return DAGs that do NOT match the pattern instead
+                of those that do. Useful for "which DAGs are missing X?" queries.
 
     Returns:
-        JSON with search results including matched DAGs, snippet context,
-        and summary counts
+        JSON with search results including matched/non-matched DAGs and counts
     """
     return _search_dag_source_impl(
         search_pattern=search_pattern,
@@ -311,6 +338,7 @@ def search_dag_source(
         dag_id_pattern=dag_id_pattern,
         context_lines=context_lines,
         limit=limit,
+        invert=invert,
     )
 
 
