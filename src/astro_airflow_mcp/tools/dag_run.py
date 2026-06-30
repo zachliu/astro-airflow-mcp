@@ -23,7 +23,7 @@ def _list_dag_runs_impl(
     offset: int = DEFAULT_OFFSET,
     start_date_gte: str | None = None,
     start_date_lte: str | None = None,
-    order_by: str | None = None,
+    order_by: str = "-start_date",
 ) -> str:
     try:
         adapter = _get_adapter()
@@ -55,7 +55,7 @@ def list_dag_runs(
     limit: int = 25,
     start_date_gte: str | None = None,
     start_date_lte: str | None = None,
-    order_by: str | None = None,
+    order_by: str = "-start_date",
 ) -> str:
     """Get execution history and status of DAG runs (workflow executions).
 
@@ -88,10 +88,11 @@ def list_dag_runs(
         limit: Maximum number of runs to return (default: 25)
         start_date_gte: Filter runs starting on or after this date (ISO 8601, e.g. '2025-05-01T00:00:00Z')
         start_date_lte: Filter runs starting on or before this date (ISO 8601)
-        order_by: Sort field with optional '-' prefix for descending (e.g. '-start_date')
+        order_by: Sort field with optional '-' prefix for descending.
+            Defaults to '-start_date' (most-recent runs first).
 
     Returns:
-        JSON with list of DAG runs matching the filters
+        JSON with list of DAG runs matching the filters, sorted most-recent-first by default
     """
     return _list_dag_runs_impl(
         dag_id=dag_id,

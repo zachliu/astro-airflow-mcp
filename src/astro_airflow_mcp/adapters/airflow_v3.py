@@ -7,6 +7,7 @@ import httpx
 
 from astro_airflow_mcp.adapters.base import AirflowAdapter, NotFoundError
 from astro_airflow_mcp.logging import get_logger
+from astro_airflow_mcp.utils import normalize_airflow_url
 
 logger = get_logger(__name__)
 
@@ -59,7 +60,7 @@ class AirflowV3Adapter(AirflowAdapter):
         try:
             with httpx.Client(timeout=10.0) as client:
                 response = client.post(
-                    f"{airflow_url}/auth/token",
+                    f"{normalize_airflow_url(airflow_url)}/auth/token",
                     data={"username": username, "password": password},
                     headers={"Content-Type": "application/x-www-form-urlencoded"},
                 )

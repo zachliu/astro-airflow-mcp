@@ -6,6 +6,8 @@ from typing import Any
 
 import httpx
 
+from astro_airflow_mcp.utils import normalize_airflow_url
+
 
 class NotFoundError(Exception):
     """Raised when an API endpoint returns 404."""
@@ -38,7 +40,7 @@ class AirflowAdapter(ABC):
             basic_auth_getter: Callable that returns (username, password) tuple or None
                              Used as fallback for Airflow 2.x which doesn't support token auth
         """
-        self.airflow_url = airflow_url
+        self.airflow_url = normalize_airflow_url(airflow_url)
         self.version = version
         self._token_getter = token_getter
         self._basic_auth_getter = basic_auth_getter

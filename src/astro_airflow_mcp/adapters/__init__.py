@@ -7,6 +7,7 @@ import httpx
 from astro_airflow_mcp.adapters.airflow_v2 import AirflowV2Adapter
 from astro_airflow_mcp.adapters.airflow_v3 import AirflowV3Adapter
 from astro_airflow_mcp.adapters.base import AirflowAdapter, NotFoundError
+from astro_airflow_mcp.utils import normalize_airflow_url
 
 
 def detect_version(
@@ -27,6 +28,7 @@ def detect_version(
     Raises:
         RuntimeError: If version detection fails
     """
+    airflow_url = normalize_airflow_url(airflow_url)
     headers: dict[str, str] = {}
     auth: tuple[str, str] | None = None
 
